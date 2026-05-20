@@ -3,11 +3,15 @@ from postgrest import SyncPostgrestClient
 
 import os
 
+# هكذا يجب أن يقرأها السيرفر
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+# للتأكد من أنها موجودة
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL or SUPABASE_KEY is missing! Check your environment variables.")
+    print("Error: Variables are empty!") # هذا سيظهر في الـ Logs
+else:
+    print("Success: Variables loaded!") # هذا سيظهر في الـ Logs
 
 # الـ Connection
 supabase = SyncPostgrestClient(f"{SUPABASE_URL}/rest/v1", headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
