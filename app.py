@@ -1,3 +1,13 @@
+# بدلت الاسم من Client لـ Supabase_Tool
+from postgrest import SyncPostgrestClient
+
+import os
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# الـ Connection
+supabase = SyncPostgrestClient(f"{SUPABASE_URL}/rest/v1", headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3
@@ -239,33 +249,30 @@ def register():
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-
     email = data.get('email')
     password = data.get('password')
 
-    conn = get_db_connection()
-
-    user = conn.execute(
-        'SELECT * FROM Utilisateur WHERE Email = ?',
-        (email,)
-    ).fetchone()
-
-    conn.close()
-
+    # عوضنا الـ SQL بطلب للـ Supabase
+    response = supabase.table("Utilisateur").select("*").eq("Email", email).execute()
+    
+    users = response.data
+    
     # ❌ user مش موجود
-    if not user:
+    if not users:
         return jsonify({"error": "User not found"}), 401
+    
+    user = users[0]
 
-    # ❌ password غالطة
+    # ❌ password غالطة (نفس الـ Logic القديم)
     if not bcrypt.check_password_hash(user['Mot_de_passe'], password):
         return jsonify({"error": "Wrong password"}), 401
 
-    # ✅ مهم برشة: استعمل نفس أسماء DB
+    # ✅ ارجاع البيانات (نفس الـ Logic القديم)
     return jsonify({
         "id": user["ID_utilisateur"],
         "role": user["Role"],
         "email": user["Email"],
-        "nom": user["Nom"]  # <--- إضافة الإسم
+        "nom": user["Nom"]
     }), 200
 
 
@@ -2076,4 +2083,7 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Error during database init: {e}")
     
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    # التغيير هنا:
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host='0.0.0.0', port=port)
