@@ -103,7 +103,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           children: [
             UserAccountsDrawerHeader(
               decoration: BoxDecoration(color: Colors.teal),
-              accountName: Text("Admin SOTREGAMES", style: TextStyle(fontWeight: FontWeight.bold)),
+              accountName: Text("Admin ", style: TextStyle(fontWeight: FontWeight.bold)),
               accountEmail: Text(widget.adminEmail),
               currentAccountPicture: GestureDetector(
                 onTap: () {

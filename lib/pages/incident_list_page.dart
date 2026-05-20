@@ -164,7 +164,7 @@ class _IncidentListPageState extends State<IncidentListPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("📍 Parcours: ${incident['Nom_Ligne'] ?? 'N/A'}", style: TextStyle(fontWeight: FontWeight.bold)),
-            Text("🚌 Bus Numero: ${incident['Numero_bus']}"),
+            Text("🚌 Bus Numero: ${incident['Numero_bus'] ?? 'Non assigné'}"),
             Text("🕒 Date: ${incident['Date']}"),
             Text("📝 Description: ${incident['Description']}"),
             SizedBox(height: 10),
@@ -213,7 +213,7 @@ class _IncidentListPageState extends State<IncidentListPage> {
                               backgroundColor: isCritique ? Colors.red : Colors.orange[100],
                               child: Icon(isCritique ? Icons.priority_high : Icons.warning, color: isCritique ? Colors.white : Colors.orange[900]),
                             ),
-                            title: Text("Bus N°: ${incident['Numero_bus']}", style: TextStyle(fontWeight: FontWeight.bold)),
+                            title: Text("Bus N°: ${incident['Numero_bus'] ?? 'Non assigné'}", style: TextStyle(fontWeight: FontWeight.bold)),
                             subtitle: Text(incident['Description'], maxLines: 1, overflow: TextOverflow.ellipsis),
                             trailing: Icon(Icons.more_vert),
                           ),

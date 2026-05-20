@@ -26,7 +26,7 @@ try:
     import google.generativeai as genai
     import json
     # Remplacez par votre clé gratuite de https://aistudio.google.com/
-    GEMINI_API_KEY = "AIzaSyBaiHnkGJPQBw9GSRiydd3VYKNNXOiuIFQ" 
+    GEMINI_API_KEY = "AIzaSyAs1JV2C1hVXZbQAyrCPi3PMY2NNIAWylA"
     genai.configure(api_key=GEMINI_API_KEY)
     HAS_GEMINI = True
 except ImportError:
@@ -43,9 +43,9 @@ bcrypt = Bcrypt(app)
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = 'sonia.fatnassi@enis.tn' 
+app.config['MAIL_USERNAME'] = 'khawlabenhmid2@gmail.com' 
 app.config['MAIL_PASSWORD'] = 'sztw sklu nyav ypzz' 
-app.config['MAIL_DEFAULT_SENDER'] = 'sonia.fatnassi@enis.tn'
+app.config['MAIL_DEFAULT_SENDER'] = 'khawlabenhmid2@gmail.com'
 mail = Mail(app)
 
 
@@ -53,7 +53,7 @@ def get_db_connection():
     conn = sqlite3.connect('smart_trans.db') # اسم واحد وموحد
     conn.row_factory = sqlite3.Row
     return conn
-
+   
 
 
 def init_all_tables():
@@ -393,7 +393,7 @@ def get_buses():
         cursor = conn.cursor()
         
         # نطلبوا كل الحقول من جدول Bus
-        cursor.execute("SELECT * FROM Bus")
+        cursor.execute("SELECT * FROM Bus ORDER BY Code_bus DESC")
         rows = cursor.fetchall()
         conn.close()
         
@@ -433,7 +433,7 @@ def update_bus(id):
         data = request.get_json()
         numero = data.get('Numero_bus')
         etat = data.get('Etat')
-        id_chauffeur = data.get('ID_Chauffeur')
+        id_chauffeur = data.get('Code_chauffeur')  # ✅ Corrigé: même clé que Flutter envoie
 
         conn = get_db_connection()
         
@@ -505,7 +505,7 @@ def get_lignes():
     try:
         conn = get_db_connection()
         # نلوجوا في جدول Ligne اللي صنعناه حسب الدياغرام
-        lignes = conn.execute('SELECT * FROM Ligne').fetchall()
+        lignes = conn.execute('SELECT * FROM Ligne ORDER BY Code_Ligne DESC').fetchall()
         conn.close()
         
         # تحويل البيانات لـ List باش الـ Flutter يفهمها
@@ -598,6 +598,7 @@ def get_chauffeurs():
         SELECT u.ID_utilisateur, u.Nom, u.Email, c.Code_chauffeur 
         FROM Chauffeur c
         JOIN Utilisateur u ON c.ID_utilisateur = u.ID_utilisateur
+        ORDER BY c.Code_chauffeur DESC
         """
         cursor = conn.execute(query)
         rows = cursor.fetchall()
@@ -667,6 +668,7 @@ def delete_chauffeur(id):
         print(f"🚨 Erreur lors de la suppression: {e}")
         return jsonify({"error": str(e)}), 500
 # --- تحديث بيانات شيفور (Update Chauffeur) ---
+# --- تحديث بيانات شيفور (Update Chauffeur) ---
 @app.route('/update_chauffeur/<int:id>', methods=['PUT'])
 def update_chauffeur(id):
     try:
@@ -676,10 +678,21 @@ def update_chauffeur(id):
         password = data.get('Password') 
         
         conn = get_db_connection()
+        
+        # 🔐 HASH PASSWORD avant de sauvegarder
+        if password:
+            hashed_pw = bcrypt.generate_password_hash(password).decode('utf-8')
+        else:
+            # Si aucun mot de passe fourni, garder l'ancien
+            existing = conn.execute(
+                'SELECT Mot_de_passe FROM Utilisateur WHERE ID_utilisateur = ?', (id,)
+            ).fetchone()
+            hashed_pw = existing['Mot_de_passe'] if existing else ''
+        
         # نحدثوا البيانات في جدول Utilisateur
         conn.execute(
             'UPDATE Utilisateur SET Nom = ?, Email = ?, Mot_de_passe = ? WHERE ID_utilisateur = ?',
-            (nom, email, password, id)
+            (nom, email, hashed_pw, id)
         )
         conn.commit()
         conn.close()
@@ -828,7 +841,7 @@ def get_all_parcours():
             SELECT P.*, L.Libelle as Nom_Ligne
             FROM Parcours P
             JOIN Ligne L ON P.Code_Ligne = L.Code_Ligne
-            ORDER BY L.Libelle, P.Heure_depart ASC
+            ORDER BY P.ID_parcours DESC
         """
         rows = cursor.execute(query).fetchall()
         conn.close()
@@ -929,27 +942,96 @@ def add_avis():
             print(f"Erreur Gemini (Fallback TextBlob): {e}")
             # Fallback sur TextBlob si Gemini échoue
             if HAS_NLP:
-                blob = TextBlob(comment)
+                try:
+                    translated_comment = GoogleTranslator(source='auto', target='en').translate(comment)
+                    blob = TextBlob(translated_comment)
+                except Exception:
+                    blob = TextBlob(comment)
                 sentiment_score = blob.sentiment.polarity
-                if sentiment_score > 0.1: sentiment_label = "Positif"
-                elif sentiment_score < -0.1: sentiment_label = "Négatif"
+                
+                # --- Modèle NLP Précis : Ajustement pondéré (Français & Derja Tunisienne) ---
+                comment_lower = comment.lower()
+                
+                # Listes de mots avec poids
+                strong_neg = ["catastrophe", "horrible", "honteux", "scandale", "khayeb", "masakh", "bhim", "msakh", "ykhawef", "danger", "vol", "arnaque", "catastrophique"]
+                neg_words = ["n'aime pas", "n'aime plus", "déteste", "nul", "mauvais", "pire", "sale", "impoli", "retard", "lent", "problème", "panne", "froid", "chaud", "bruit", "saturé", "plein", "ma famech", "pas bien", "non", "désagréable"]
+                
+                strong_pos = ["parfait", "meilleur", "tayara", "magnifique", "extraordinaire", "top", "merveilleux", "incroyable"]
+                pos_words = ["super", "excellent", "génial", "adore", "très bien", "bravo", "propre", "merci", "bahi", "behi", "cv", "bien", "bon", "rapide", "confortable", "gentil", "respectueux"]
+                
+                # Calcul de la pénalité / bonus
+                bonus_malus = 0.0
+                for w in strong_neg:
+                    if w in comment_lower: bonus_malus -= 0.8
+                for w in neg_words:
+                    if w in comment_lower: bonus_malus -= 0.4
+                for w in strong_pos:
+                    if w in comment_lower: bonus_malus += 0.8
+                for w in pos_words:
+                    if w in comment_lower: bonus_malus += 0.4
+                
+                sentiment_score += bonus_malus
+                sentiment_score = max(-1.0, min(1.0, sentiment_score)) # Normalisation
+
+                if sentiment_score >= 0.15: sentiment_label = "Positif"
+                elif sentiment_score <= -0.15: sentiment_label = "Négatif"
+                else: sentiment_label = "Neutre"
+                
+                words = [word.lower() for word in comment.split() if len(word) > 3]
+                keywords = ", ".join(list(set(words))[:5])
+
+                # Catégorisation plus précise (Français & Derja)
+                if any(w in comment_lower for w in ['chauffeur', 'conducteur', 'pilote', 'chafer', 'chaufeur']): category = "Chauffeur"
+                elif any(w in comment_lower for w in ['confort', 'siege', 'clim', 'climatisation', 'chaud', 'froid', 'propre', 'sale', 'bruit', 'masakh', 'ndhif', 'korsi']): category = "Confort"
+                elif any(w in comment_lower for w in ['bus', 'vehicule', 'panne', 'vieux', 'neuf', 'voiture', 'car', 'moteur', 'karoosa']): category = "Véhicule"
+                elif any(w in comment_lower for w in ['retard', 'heure', 'temps', 'attente', 'horaire', 'ponctuel', 'regularite', 'trajet', 'ma famech', 'wqayet']): category = "Service"
     
     elif HAS_NLP and comment:
         # Code existant TextBlob si Gemini n'est pas configuré
         try:
-            blob = TextBlob(comment)
+            try:
+                translated_comment = GoogleTranslator(source='auto', target='en').translate(comment)
+                blob = TextBlob(translated_comment)
+            except Exception:
+                blob = TextBlob(comment)
             sentiment_score = blob.sentiment.polarity
-            if sentiment_score > 0.1: sentiment_label = "Positif"
-            elif sentiment_score < -0.1: sentiment_label = "Négatif"
+
+            # --- Modèle NLP Précis : Ajustement pondéré (Français & Derja Tunisienne) ---
+            comment_lower = comment.lower()
+            
+            # Listes de mots avec poids
+            strong_neg = ["catastrophe", "horrible", "honteux", "scandale", "khayeb", "masakh", "bhim", "msakh", "ykhawef", "danger", "vol", "arnaque", "catastrophique"]
+            neg_words = ["n'aime pas", "n'aime plus", "déteste", "nul", "mauvais", "pire", "sale", "impoli", "retard", "lent", "problème", "panne", "froid", "chaud", "bruit", "saturé", "plein", "ma famech", "pas bien", "non", "désagréable"]
+            
+            strong_pos = ["parfait", "meilleur", "tayara", "magnifique", "extraordinaire", "top", "merveilleux", "incroyable"]
+            pos_words = ["super", "excellent", "génial", "adore", "très bien", "bravo", "propre", "merci", "bahi", "behi", "cv", "bien", "bon", "rapide", "confortable", "gentil", "respectueux"]
+            
+            # Calcul de la pénalité / bonus
+            bonus_malus = 0.0
+            for w in strong_neg:
+                if w in comment_lower: bonus_malus -= 0.8
+            for w in neg_words:
+                if w in comment_lower: bonus_malus -= 0.4
+            for w in strong_pos:
+                if w in comment_lower: bonus_malus += 0.8
+            for w in pos_words:
+                if w in comment_lower: bonus_malus += 0.4
+            
+            sentiment_score += bonus_malus
+            sentiment_score = max(-1.0, min(1.0, sentiment_score)) # Normalisation
+
+            if sentiment_score >= 0.15: sentiment_label = "Positif"
+            elif sentiment_score <= -0.15: sentiment_label = "Négatif"
+            else: sentiment_label = "Neutre"
             
             words = [word.lower() for word in comment.split() if len(word) > 3]
             keywords = ", ".join(list(set(words))[:5])
 
-            comment_lower = comment.lower()
-            if any(w in comment_lower for w in ['chauffeur', 'conducteur', 'pilote']): category = "Chauffeur"
-            elif any(w in comment_lower for w in ['confort', 'siege', 'clim']): category = "Confort"
-            elif any(w in comment_lower for w in ['bus', 'vehicule']): category = "Véhicule"
-            elif any(w in comment_lower for w in ['retard', 'heure', 'temps']): category = "Service"
+            # Catégorisation plus précise (Français & Derja)
+            if any(w in comment_lower for w in ['chauffeur', 'conducteur', 'pilote', 'chafer', 'chaufeur']): category = "Chauffeur"
+            elif any(w in comment_lower for w in ['confort', 'siege', 'clim', 'climatisation', 'chaud', 'froid', 'propre', 'sale', 'bruit', 'masakh', 'ndhif', 'korsi']): category = "Confort"
+            elif any(w in comment_lower for w in ['bus', 'vehicule', 'panne', 'vieux', 'neuf', 'voiture', 'car', 'moteur', 'karoosa']): category = "Véhicule"
+            elif any(w in comment_lower for w in ['retard', 'heure', 'temps', 'attente', 'horaire', 'ponctuel', 'regularite', 'trajet', 'ma famech', 'wqayet']): category = "Service"
         except Exception as e:
             print(f"Erreur NLP: {e}")
 
@@ -1419,12 +1501,14 @@ def get_all_incidents():
         # نربطوا الجداول باش نجيبوا رقم الكار واسم الخط بطريقة ذكية (Robust Fallback)
         query = '''
             SELECT i.*, l.Libelle as Nom_Ligne, 
-                   COALESCE(b1.Numero_bus, b2.Numero_bus, b3.Numero_bus) as Numero_bus
+                   COALESCE(b1.Numero_bus, b2.Numero_bus, b3.Numero_bus, b4.Numero_bus) as Numero_bus
             FROM Incident i
             LEFT JOIN Ligne l ON i.Code_Ligne = l.Code_Ligne
             LEFT JOIN Bus b1 ON i.Code_bus = b1.Code_bus
             LEFT JOIN Bus b2 ON l.Code_bus = b2.Code_bus
             LEFT JOIN Bus b3 ON i.Code_chauffeur = b3.Code_chauffeur
+            LEFT JOIN Chauffeur c_fix ON i.Code_chauffeur = c_fix.ID_utilisateur
+            LEFT JOIN Bus b4 ON c_fix.Code_chauffeur = b4.Code_chauffeur
             GROUP BY i.ID_incident
             ORDER BY i.Date DESC
         '''
@@ -1512,6 +1596,7 @@ def get_all_lignes():
             LEFT JOIN Bus B ON L.Code_bus = B.Code_bus
             LEFT JOIN Chauffeur C ON B.Code_chauffeur = C.Code_chauffeur
             LEFT JOIN Utilisateur U ON C.ID_utilisateur = U.ID_utilisateur
+            ORDER BY L.Code_Ligne DESC
         """
         lignes = conn.execute(query).fetchall()
         
@@ -1631,18 +1716,44 @@ def declare_incident():
         
     try:
         data = request.get_json()
+        user_id = data.get('driver_id')
+        description = data.get('description', '')
+        timestamp = data.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Schema: ID_incident, Description, Date, Code_chauffeur, Code_Ligne
+        # 1. Trouver le Code_chauffeur à partir de l'ID_utilisateur
+        res_chauffeur = cursor.execute("SELECT Code_chauffeur FROM Chauffeur WHERE ID_utilisateur = ?", (user_id,)).fetchone()
+        if not res_chauffeur:
+            conn.close()
+            return jsonify({"error": "Chauffeur non trouvé pour cet utilisateur"}), 404
+            
+        code_chauffeur = res_chauffeur['Code_chauffeur']
+        
+        # 2. Trouver le Code_bus et Code_Ligne associés à ce chauffeur
+        # On cherche d'abord via le Bus (Liaison directe Chauffeur -> Bus)
+        res_info = cursor.execute("""
+            SELECT B.Code_bus, L.Code_Ligne 
+            FROM Bus B 
+            LEFT JOIN Ligne L ON B.Code_bus = L.Code_bus 
+            WHERE B.Code_chauffeur = ?
+            LIMIT 1
+        """, (code_chauffeur,)).fetchone()
+        
+        code_bus = res_info['Code_bus'] if res_info else None
+        code_ligne = res_info['Code_Ligne'] if res_info else data.get('line_id', 1)
+
+        # 3. Insertion de l'incident avec toutes les infos
         cursor.execute("""
-            INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne) 
-            VALUES (?, ?, ?, ?)
-        """, (data['description'], data['timestamp'], data['driver_id'], data.get('line_id', 1))) 
+            INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus) 
+            VALUES (?, ?, ?, ?, ?)
+        """, (description, timestamp, code_chauffeur, code_ligne, code_bus))
         
         conn.commit()
         conn.close()
-        return jsonify({"message": "Incident signalé"}), 201
+        print(f"Incident déclaré: Bus {code_bus}, Chauffeur {code_chauffeur}")
+        return jsonify({"message": "Incident signalé avec succès"}), 201
     except Exception as e:
         print(f"Erreur declare_incident: {e}")
         return jsonify({"error": str(e)}), 500

@@ -4,4 +4,7 @@ flask-bcrypt
 textblob
 deep-translator
 langdetect
-google-generativeai
+google-genai
+postgrest
+gunicorn
+flask-mail

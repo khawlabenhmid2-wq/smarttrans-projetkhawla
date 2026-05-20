@@ -137,7 +137,7 @@ class _ClientDashboardState extends State<ClientDashboard> {
         children: [
           UserAccountsDrawerHeader(
             decoration: const BoxDecoration(color: Colors.teal),
-            accountName: Text(widget.userEmail),
+            accountName: const Text(''),
             accountEmail: Text(widget.userEmail),
             currentAccountPicture: const CircleAvatar(
               backgroundColor: Colors.white,

@@ -129,7 +129,7 @@ class _LoginPageState extends State<LoginPage> {
                     letterSpacing: 2.0,
                   ),
                 ),
-                const Text("Cyber Security Edition 2026", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  
                 const SizedBox(height: 40),
                 TextField(
                   controller: emailController,

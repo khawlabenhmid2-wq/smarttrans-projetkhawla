@@ -122,8 +122,8 @@ class _ClientAiDashboardPageState extends State<ClientAiDashboardPage> {
     }
 
     final double satisfaction =
-        (driverReport['satisfaction_chauffeur'] ?? 0.0) as double;
-    final double avgNote = (driverReport['avg_note'] ?? 0.0) as double;
+        (driverReport['satisfaction_chauffeur'] ?? 0.0).toDouble();
+    final double avgNote = (driverReport['avg_note'] ?? 0.0).toDouble();
     final Map sentDist = driverReport['sentiment_distribution'] as Map? ?? {};
     final List keywords = driverReport['top_keywords'] as List? ?? [];
     final List topDrivers = driverReport['top_drivers'] as List? ?? [];
@@ -490,7 +490,7 @@ class _ClientAiDashboardPageState extends State<ClientAiDashboardPage> {
             ? Icons.sentiment_very_dissatisfied
             : Icons.sentiment_neutral;
     final double sentScore =
-        ((avis['Sentiment_score'] ?? 0) as num).toDouble();
+        (avis['Sentiment_score'] ?? 0.0).toDouble();
     final double scoreDisplay = (sentScore + 1) / 2 * 100;
 
     return Container(
