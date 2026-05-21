@@ -4,8 +4,8 @@ from postgrest import SyncPostgrestClient
 import os
 
 # هكذا يجب أن يقرأها السيرفر
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_URL = os.environ.get("https://viivghsenpwscgocbewb.supabase.co")
+SUPABASE_KEY = os.environ.get("sb_secret_nBVDqE7z9yDBrcj86FH14Sw_8h55kaqU")
 
 # للتأكد من أنها موجودة
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -2082,6 +2082,13 @@ def get_all_historique():
     except Exception as e:
         print(f"Erreur get_all_historique: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+
+@app.route('/test', methods=['GET', 'POST'])
+def test():
+    print("سيرفر وصله طلب!")
+    return jsonify({"message": "السيرفر يخدم!"})
 
 
 if __name__ == '__main__':
