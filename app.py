@@ -1,11 +1,15 @@
 # بدلت الاسم من Client لـ Supabase_Tool
 from postgrest import SyncPostgrestClient
 
-import os
+import os # تأكدي إنك عملتي import لـ os
 
-# هكذا يجب أن يقرأها السيرفر
-SUPABASE_URL = os.environ.get("https://viivghsenpwscgocbewb.supabase.co")
-SUPABASE_KEY = os.environ.get("sb_secret_nBVDqE7z9yDBrcj86FH14Sw_8h55kaqU")
+# اقرأي القيم من Render
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# تأكدي إنهم موش فارغين (لو السيرفر طاح، هذا السطر يوريك وين الغلطة)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("WARNING: Variables are empty!")
 
 # للتأكد من أنها موجودة
 if not SUPABASE_URL or not SUPABASE_KEY:
