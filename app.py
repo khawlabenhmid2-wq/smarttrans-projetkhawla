@@ -258,35 +258,36 @@ def register():
         return jsonify({"error": str(e)}), 500
 
 
-# 2. طريق الدخول (Login)
-@app.route('/login', methods=['POST'])
+
+    
+    @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No data provided"}), 400
+            
+        email = data.get('email')
+        password = data.get('password')
 
-    # عوضنا الـ SQL بطلب للـ Supabase
-    response = supabase.table("Utilisateur").select("*").eq("Email", email).execute()
-    
-    users = response.data
-    
-    # ❌ user مش موجود
-    if not users:
-        return jsonify({"error": "User not found"}), 401
-    
-    user = users[0]
+        # طلب Supabase
+        response = supabase.table("Utilisateur").select("*").eq("Email", email).execute()
+        users = response.data
 
-    # ❌ password غالطة (نفس الـ Logic القديم)
-    if not bcrypt.check_password_hash(user['Mot_de_passe'], password):
-        return jsonify({"error": "Wrong password"}), 401
+        if users and users[0]['Password'] == password: # تأكدي من تسمية العمود 'Password'
+            return jsonify({
+                "message": "Login successful",
+                "email": users[0]['Email'],
+                "role": users[0]['Role'],
+                "id": users[0]['id'],
+                "nom": users[0].get('Nom', 'Utilisateur')
+            }), 200
+        else:
+            return jsonify({"message": "Identifiants incorrects"}), 401
 
-    # ✅ ارجاع البيانات (نفس الـ Logic القديم)
-    return jsonify({
-        "id": user["ID_utilisateur"],
-        "role": user["Role"],
-        "email": user["Email"],
-        "nom": user["Nom"]
-    }), 200
+    except Exception as e:
+        print(f"Error in login: {e}") # هذا يظهر في الـ Logs
+        return jsonify({"message": "Server error", "error": str(e)}), 500
 
 
 
