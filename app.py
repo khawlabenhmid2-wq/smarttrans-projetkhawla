@@ -260,7 +260,7 @@ def register():
 
 
     
-@app.route('/login', methods=['POST'])
+@app.route('/login', methods=['GET', 'POST']) # هذا السطر هو المهم!
 def login():
     try:
         data = request.get_json()
