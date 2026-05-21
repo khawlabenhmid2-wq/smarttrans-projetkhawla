@@ -260,47 +260,50 @@ def register():
 
 
     
-@app.route('/login', methods=['GET', 'POST']) # هذا السطر هو المهم!
+@app.route('/login', methods=['POST'])
 def login():
     try:
+        # 1. استقبال البيانات
         data = request.get_json()
-
         if not data:
-            return jsonify({"message": "No data provided"}), 400
-
+            return jsonify({"error": "No data provided"}), 400
+            
         email = data.get('email')
         password = data.get('password')
 
-        # طلب Supabase
-        response = supabase.table("Utilisateur") \
-            .select("*") \
-            .eq("Email", email) \
-            .execute()
+        # 2. التحقق من وجود المدخلات
+        if not email or not password:
+            return jsonify({"error": "Missing email or password"}), 400
 
-        users = response.data
-
-        # تأكدي من تسمية العمود 'Password'
-        if users and users[0]['Password'] == password:
-            return jsonify({
-                "message": "Login successful",
-                "email": users[0]['Email'],
-                "role": users[0]['Role'],
-                "id": users[0]['id'],
-                "nom": users[0].get('Nom', 'Utilisateur')
-            }), 200
-
+        # 3. الاتصال بقاعدة البيانات
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 4. البحث عن المستخدم
+        cursor.execute("SELECT * FROM Utilisateur WHERE Email = ?", (email,))
+        user = cursor.fetchone()
+        
+        if user:
+            # هنا نفترض أن الباسوورد مشفر في قاعدة البيانات
+            # تأكدي من ترتيب الأعمدة في الجدول (غالباً user[2] هو الباسوورد)
+            stored_password = user[3] 
+            
+            # التحقق من الباسوورد (باستخدام bcrypt)
+            if bcrypt.check_password_hash(stored_password, password):
+                conn.close()
+                return jsonify({"message": "Login successful", "user": user[0]}), 200
+            else:
+                conn.close()
+                return jsonify({"error": "Invalid password"}), 401
         else:
-            return jsonify({
-                "message": "Identifiants incorrects"
-            }), 401
+            conn.close()
+            return jsonify({"error": "User not found"}), 404
 
     except Exception as e:
-        print(f"Error in login: {e}")  # يظهر في الـ Logs
+        # هذا السطر سيطبع الخطأ الحقيقي في الـ Logs في Render
+        print("ERROR DETECTED IN LOGIN:", str(e))
+        return jsonify({"error": "Internal Server Error", "details": str(e)}), 500
 
-        return jsonify({
-            "message": "Server error",
-            "error": str(e)
-        }), 500
 
 
 
