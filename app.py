@@ -16,7 +16,8 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("Error: Variables are empty!") # هذا سيظهر في الـ Logs
 else:
     print("Success: Variables loaded!") # هذا سيظهر في الـ Logs
-
+print(f"DEBUG: URL is {SUPABASE_URL}")
+print(f"DEBUG: Key is {SUPABASE_KEY}") # هذا باش يوريك هل السيرفر شافهم أو لا
 # الـ Connection
 supabase = SyncPostgrestClient(f"{SUPABASE_URL}/rest/v1", headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
 
