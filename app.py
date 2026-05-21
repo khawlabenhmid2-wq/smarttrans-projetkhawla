@@ -260,21 +260,27 @@ def register():
 
 
     
-    @app.route('/login', methods=['POST'])
+@app.route('/login', methods=['POST'])
 def login():
     try:
         data = request.get_json()
+
         if not data:
             return jsonify({"message": "No data provided"}), 400
-            
+
         email = data.get('email')
         password = data.get('password')
 
         # طلب Supabase
-        response = supabase.table("Utilisateur").select("*").eq("Email", email).execute()
+        response = supabase.table("Utilisateur") \
+            .select("*") \
+            .eq("Email", email) \
+            .execute()
+
         users = response.data
 
-        if users and users[0]['Password'] == password: # تأكدي من تسمية العمود 'Password'
+        # تأكدي من تسمية العمود 'Password'
+        if users and users[0]['Password'] == password:
             return jsonify({
                 "message": "Login successful",
                 "email": users[0]['Email'],
@@ -282,12 +288,19 @@ def login():
                 "id": users[0]['id'],
                 "nom": users[0].get('Nom', 'Utilisateur')
             }), 200
+
         else:
-            return jsonify({"message": "Identifiants incorrects"}), 401
+            return jsonify({
+                "message": "Identifiants incorrects"
+            }), 401
 
     except Exception as e:
-        print(f"Error in login: {e}") # هذا يظهر في الـ Logs
-        return jsonify({"message": "Server error", "error": str(e)}), 500
+        print(f"Error in login: {e}")  # يظهر في الـ Logs
+
+        return jsonify({
+            "message": "Server error",
+            "error": str(e)
+        }), 500
 
 
 
