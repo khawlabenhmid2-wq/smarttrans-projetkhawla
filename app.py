@@ -1,4 +1,16 @@
-# بدلت الاسم من Client لـ Supabase_Tool
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+# ✅ Ajoutez ces lignes juste après app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)# بدلت الاسم من Client لـ Supabase_Tool
 from postgrest import SyncPostgrestClient
 
 import os # تأكدي إنك عملتي import لـ os
@@ -72,8 +84,10 @@ app.config['MAIL_DEFAULT_SENDER'] = 'khawlabenhmid2@gmail.com'
 mail = Mail(app)
 
 
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'smart_trans.db')
+
 def get_db_connection():
-    conn = sqlite3.connect('smart_trans.db') # اسم واحد وموحد
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
    
@@ -2120,7 +2134,9 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Error during database init: {e}")
     
-    # التغيير هنا:
-    import os
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host='0.0.0.0', port=port)
+import os
+import uvicorn
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))  # ✅ Render impose son propre PORT
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
