@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from dotenv import load_dotenv
+import uvicorn
 app = FastAPI()
 
 # ✅ Ajoutez ces lignes juste après app = FastAPI()
@@ -14,7 +15,7 @@ app.add_middleware(
 from postgrest import SyncPostgrestClient
 
 import os # تأكدي إنك عملتي import لـ os
-
+load_dotenv()
 # اقرأي القيم من Render
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -2134,9 +2135,5 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Error during database init: {e}")
     
-import os
-import uvicorn
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))  # ✅ Render impose son propre PORT
-    uvicorn.runapp.run(host='0.0.0.0', port=port, debug=False)
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host='0.0.0.0', port=port, debug=False)
