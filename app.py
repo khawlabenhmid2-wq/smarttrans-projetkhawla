@@ -1188,6 +1188,7 @@ def add_avis():
             if res_bus: code_bus = res_bus['Code_bus']
 
         # 1. Insertion de l'avis avec les scores IA
+        date_avis = data.get('date', datetime.now().strftime("%Y-%m-%d"))
         cursor.execute("""
             INSERT INTO Avis 
             (Code_client, ID_historique, ID_parcours, Note, Commentaire, Sentiment_score, Sentiment_label, Keywords, Category, Date)
@@ -1202,8 +1203,9 @@ def add_avis():
             sentiment_label,
             keywords,
             category,
-            data.get('date', datetime.now().strftime("%Y-%m-%d"))
+            date_avis
         ))
+        new_avis_id = cursor.lastrowid
         
         # 2. MISE À JOUR AUTOMATIQUE DE LA PERFORMANCE DU CHAUFFEUR
 
@@ -1235,15 +1237,33 @@ def add_avis():
                 """, (id_historique, id_historique))
 
         # ⭐ DÉTECTION AUTOMATIQUE D'INCIDENT (SÉCURITÉ) ⭐
+        incident_id = None
+        date_incident = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if is_risk == "Oui":
             cursor.execute("""
                 INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus)
                 VALUES (?, ?, ?, ?, ?)
-            """, (f"[IA ALERT] {comment}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), code_chauffeur, code_ligne, code_bus))
+            """, (f"[IA ALERT] {comment}", date_incident, code_chauffeur, code_ligne, code_bus))
+            incident_id = cursor.lastrowid
             print(f"Incident de securite detecte automatiquement et enregistre !")
 
         conn.commit()
         conn.close()
+
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Avis', 'insert', {
+            'ID_avis': new_avis_id, 'Code_client': client_id, 'ID_historique': id_historique,
+            'ID_parcours': parcours_id, 'Note': note, 'Commentaire': comment,
+            'Sentiment_score': sentiment_score, 'Sentiment_label': sentiment_label,
+            'Keywords': keywords, 'Category': category, 'Date': date_avis
+        })
+        if is_risk == "Oui" and incident_id:
+            sync_to_supabase('Incident', 'insert', {
+                'ID_incident': incident_id, 'Description': f"[IA ALERT] {comment}",
+                'Date': date_incident, 'Code_chauffeur': code_chauffeur,
+                'Code_Ligne': code_ligne, 'Code_bus': code_bus, 'Statut': 'Signalé'
+            })
+
         return jsonify({
             "status": "success", 
             "ai_analysis": {
