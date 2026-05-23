@@ -297,12 +297,20 @@ def register():
             (nom, email, hashed_pw, 'client')
         )
         new_id = cursor.lastrowid
+        
+        # 2. Créer le profil Client
+        cursor.execute("INSERT INTO Client (ID_utilisateur) VALUES (?)", (new_id,))
+        new_client_id = cursor.lastrowid
+        
         conn.commit()
         conn.close()
         # 🔄 Sync vers Supabase
         sync_to_supabase('Utilisateur', 'insert', {
             'ID_utilisateur': new_id, 'Nom': nom, 'Email': email,
             'Mot_de_passe': hashed_pw, 'Role': 'client'
+        })
+        sync_to_supabase('Client', 'insert', {
+            'Code_client': new_client_id, 'ID_utilisateur': new_id
         })
         return jsonify({"message": "Compte créé"}), 201
     except Exception as e:
