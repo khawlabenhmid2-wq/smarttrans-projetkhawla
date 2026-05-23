@@ -32,7 +32,37 @@ else:
 print(f"DEBUG: URL is {SUPABASE_URL}")
 print(f"DEBUG: Key is {SUPABASE_KEY}") # هذا باش يوريك هل السيرفر شافهم أو لا
 # الـ Connection
-supabase = SyncPostgrestClient(f"{SUPABASE_URL}/rest/v1", headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
+try:
+    supabase = SyncPostgrestClient(f"{SUPABASE_URL}/rest/v1", headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
+    SUPABASE_OK = True
+except Exception as _e:
+    print(f"WARNING: Supabase connection failed: {_e}")
+    supabase = None
+    SUPABASE_OK = False
+
+# ─── Synchronisation Supabase helper ─────────────────────────────
+def sync_to_supabase(table: str, action: str, data: dict = None, match: dict = None):
+    """Synchronise une opération vers Supabase en temps réel.
+    action: 'insert', 'update', 'delete'
+    """
+    global supabase, SUPABASE_OK
+    if not SUPABASE_OK or supabase is None:
+        return
+    try:
+        if action == 'insert' and data:
+            supabase.from_(table).insert(data).execute()
+        elif action == 'update' and data and match:
+            q = supabase.from_(table).update(data)
+            for col, val in match.items():
+                q = q.eq(col, val)
+            q.execute()
+        elif action == 'delete' and match:
+            q = supabase.from_(table).delete()
+            for col, val in match.items():
+                q = q.eq(col, val)
+            q.execute()
+    except Exception as _se:
+        print(f"[SUPABASE SYNC WARNING] table={table} action={action} err={_se}")
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -266,8 +296,14 @@ def register():
             "INSERT INTO Utilisateur (Nom, Email, Mot_de_passe, Role) VALUES (?, ?, ?, ?)",
             (nom, email, hashed_pw, 'client')
         )
+        new_id = cursor.lastrowid
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Utilisateur', 'insert', {
+            'ID_utilisateur': new_id, 'Nom': nom, 'Email': email,
+            'Mot_de_passe': hashed_pw, 'Role': 'client'
+        })
         return jsonify({"message": "Compte créé"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -465,13 +501,18 @@ def add_bus():
         id_chauffeur = data.get('Code_chauffeur') 
 
         conn = get_db_connection()
-        conn.execute('''
+        cur = conn.execute('''
             INSERT INTO Bus (Numero_bus, Etat, Code_chauffeur) 
             VALUES (?, ?, ?)
         ''', (numero, etat, id_chauffeur))
-        
+        new_bus_id = cur.lastrowid
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Bus', 'insert', {
+            'Code_bus': new_bus_id, 'Numero_bus': numero,
+            'Etat': etat, 'Code_chauffeur': id_chauffeur
+        })
         return jsonify({"status": "success", "message": "Bus ajouté"}), 201
     except Exception as e:
         print(f"Erreur add_bus: {e}") 
@@ -486,17 +527,18 @@ def update_bus(id):
         id_chauffeur = data.get('Code_chauffeur')  # ✅ Corrigé: même clé que Flutter envoie
 
         conn = get_db_connection()
-        
-        # ✅ التغيير هنا: Code_chauffeur عوضاً عن ID_Chauffeur
-        # ✅ والـ ID متاع الكار اسمو Code_bus
         conn.execute('''
             UPDATE Bus 
             SET Numero_bus = ?, Etat = ?, Code_chauffeur = ? 
             WHERE Code_bus = ?
         ''', (numero, etat, id_chauffeur, id))
-        
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Bus', 'update',
+            {'Numero_bus': numero, 'Etat': etat, 'Code_chauffeur': id_chauffeur},
+            {'Code_bus': id}
+        )
         return jsonify({"status": "success", "message": "Bus mis à jour"}), 200
     except Exception as e:
         print(f"Erreur update_bus: {e}")
@@ -507,18 +549,18 @@ def update_bus(id):
 def delete_bus(id):
     try:
         conn = get_db_connection()
-        
         # 1. Nettoyage des incidents liés à ce bus
         conn.execute('DELETE FROM Incident WHERE Code_bus = ?', (id,))
-        
         # 2. Mettre à NULL le Code_bus dans les lignes associées
         conn.execute('UPDATE Ligne SET Code_bus = NULL WHERE Code_bus = ?', (id,))
-        
         # 3. Suppression du bus
         conn.execute('DELETE FROM Bus WHERE Code_bus = ?', (id,))
-        
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Incident', 'delete', match={'Code_bus': id})
+        sync_to_supabase('Ligne', 'update', {'Code_bus': None}, {'Code_bus': id})
+        sync_to_supabase('Bus', 'delete', match={'Code_bus': id})
         return jsonify({"status": "success", "message": "Bus et incidents associés supprimés"}), 200
     except Exception as e:
         print(f"Erreur delete_bus: {e}")
@@ -540,11 +582,16 @@ def add_ligne():
             "INSERT INTO Ligne (Libelle, Description, Code_bus) VALUES (?, ?, ?)",
             (data['libelle'], data['description'], data['code_bus'])
         )
-        
+        new_ligne_id = cursor.lastrowid
         conn.commit()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Ligne', 'insert', {
+            'Code_Ligne': new_ligne_id, 'Libelle': data['libelle'],
+            'Description': data['description'], 'Code_bus': data['code_bus']
+        })
         return jsonify({"message": "Ligne ajoutée avec succès"}), 201
     except Exception as e:
-        print(f"Erreur Flask: {str(e)}") # هذي باش تطلعلك الغلطة في الـ Terminal
+        print(f"Erreur Flask: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         if conn:
@@ -578,9 +625,10 @@ def delete_ligne(id):
         
         # ✅ السطر الجديد لازم يكون هكا (صحيح):
         conn.execute('DELETE FROM Ligne WHERE Code_Ligne = ?', (id,))
-        
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Ligne', 'delete', match={'Code_Ligne': id})
         return jsonify({"message": "Ligne supprimée"}), 200
     except Exception as e:
         print(f"Erreur delete_ligne: {e}")
@@ -596,16 +644,18 @@ def update_ligne(id):
         code_bus = data.get('code_bus') or data.get('Code_bus')
 
         conn = get_db_connection()
-        
-        # We update all three fields: Libelle, Description, and Code_bus
         conn.execute('''
             UPDATE Ligne 
             SET Libelle = ?, Description = ?, Code_bus = ? 
             WHERE Code_Ligne = ?
         ''', (libelle, description, code_bus, id))
-        
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Ligne', 'update',
+            {'Libelle': libelle, 'Description': description, 'Code_bus': code_bus},
+            {'Code_Ligne': id}
+        )
         return jsonify({"message": "Ligne mise à jour"}), 200
     except Exception as e:
         print(f"Erreur update_ligne: {e}")
@@ -685,12 +735,21 @@ def add_chauffeur():
         user_id = cursor.lastrowid
 
         # 2. نضيفه في Chauffeur
-        conn.execute(
+        cur2 = conn.execute(
             'INSERT INTO Chauffeur (ID_utilisateur) VALUES (?)',
             (user_id,)
         )
+        code_chauffeur_new = cur2.lastrowid
 
         conn.commit()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Utilisateur', 'insert', {
+            'ID_utilisateur': user_id, 'Nom': nom, 'Email': email,
+            'Mot_de_passe': hashed_pw, 'Role': 'chauffeur'
+        })
+        sync_to_supabase('Chauffeur', 'insert', {
+            'Code_chauffeur': code_chauffeur_new, 'ID_utilisateur': user_id
+        })
         return jsonify({"message": "Chauffeur ajouté avec succès"}), 201
 
     except Exception as e:
@@ -707,12 +766,13 @@ def delete_chauffeur(id):
         conn = get_db_connection()
         # 1. نحيو الشوفير من جدول Chauffeur
         conn.execute('DELETE FROM Chauffeur WHERE ID_utilisateur = ?', (id,))
-        
         # 2. نحيو المستخدم من جدول Utilisateur
         conn.execute('DELETE FROM Utilisateur WHERE ID_utilisateur = ?', (id,))
-        
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Chauffeur', 'delete', match={'ID_utilisateur': id})
+        sync_to_supabase('Utilisateur', 'delete', match={'ID_utilisateur': id})
         return jsonify({"message": "Chauffeur supprimé avec succès"}), 200
     except Exception as e:
         print(f"🚨 Erreur lors de la suppression: {e}")
@@ -746,6 +806,11 @@ def update_chauffeur(id):
         )
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Utilisateur', 'update',
+            {'Nom': nom, 'Email': email, 'Mot_de_passe': hashed_pw},
+            {'ID_utilisateur': id}
+        )
         return jsonify({"message": "Chauffeur mis à jour ✅"}), 200
     except Exception as e:
         print(f"🚨 Erreur: {e}")
@@ -927,10 +992,15 @@ def delete_parcours(id):
 @app.route('/get_incidents', methods=['GET'])
 def get_incidents():
     conn = get_db_connection()
-    query = '''SELECT I.*, B.Numero_bus, U.Nom as NomChauffeur FROM Incident I
-               JOIN Bus B ON I.Code_bus = B.Code_bus
-               JOIN Chauffeur C ON B.Code_chauffeur = C.Code_chauffeur
-               JOIN Utilisateur U ON C.ID_utilisateur = U.ID_utilisateur'''
+    # ✅ LEFT JOIN : affiche TOUS les incidents, même sans bus/chauffeur associé
+    query = '''SELECT I.*, 
+                      COALESCE(B.Numero_bus, 'N/A') as Numero_bus, 
+                      COALESCE(U.Nom, 'Inconnu') as NomChauffeur 
+               FROM Incident I
+               LEFT JOIN Bus B ON I.Code_bus = B.Code_bus
+               LEFT JOIN Chauffeur C ON I.Code_chauffeur = C.Code_chauffeur
+               LEFT JOIN Utilisateur U ON C.ID_utilisateur = U.ID_utilisateur
+               ORDER BY I.Date DESC'''
     items = [dict(ix) for ix in conn.execute(query).fetchall()]
     conn.close()
     return jsonify(items)
@@ -1361,35 +1431,42 @@ def finish_parcours(id_p):
 def add_incident():
     try:
         data = request.json
-        description = data.get('description')
-        
-        # 1. هوني نحددو الـ ID متاع الشيفور والخط (للتجربة حطيهم 1 و 402)
-        # ملاحظة: في النسخة الجاية نجيبوهم مالـ Login
-        id_chauffeur = 1  
-        id_ligne = 1 # أو 402 حسب الـ ID اللي عندك في جدول Ligne
-        
-        date_incident = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        conn = sqlite3.connect('smart_trans.db')
+        description = data.get('description', '')
+        # ✅ CORRIGÉ : on lit les vraies données envoyées par Flutter
+        id_chauffeur = data.get('Code_chauffeur') or data.get('code_chauffeur')
+        id_ligne     = data.get('Code_Ligne')    or data.get('code_ligne')
+        code_bus     = data.get('Code_bus')      or data.get('code_bus')
+        statut       = data.get('Statut', 'Signalé')
+        date_incident = data.get('Date') or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # 2. التعديل المهم: نزيدو Code_chauffeur و Code_Ligne و Code_bus في الـ INSERT
-        # نلوجو على الكار المربوطة بالشيفور
-        res_bus = cursor.execute("SELECT Code_bus FROM Bus WHERE Code_chauffeur = ?", (id_chauffeur,)).fetchone()
-        code_bus = res_bus['Code_bus'] if res_bus else None
+
+        # Si le bus n'est pas fourni, on le déduit depuis le chauffeur
+        if not code_bus and id_chauffeur:
+            res_bus = cursor.execute("SELECT Code_bus FROM Bus WHERE Code_chauffeur = ?", (id_chauffeur,)).fetchone()
+            if res_bus:
+                code_bus = res_bus['Code_bus']
 
         cursor.execute("""
-            INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus) 
-            VALUES (?, ?, ?, ?, ?)
-        """, (description, date_incident, id_chauffeur, id_ligne, code_bus))
-        
+            INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus, Statut) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (description, date_incident, id_chauffeur, id_ligne, code_bus, statut))
+        new_incident_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        
-        print(f"Incident enregistre : Chauffeur {id_chauffeur} sur Ligne {id_ligne}")
-        return jsonify({"message": "Incident ajouté avec succès"}), 201
+
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Incident', 'insert', {
+            'ID_incident': new_incident_id,
+            'Description': description, 'Date': date_incident,
+            'Code_chauffeur': id_chauffeur, 'Code_Ligne': id_ligne,
+            'Code_bus': code_bus, 'Statut': statut
+        })
+        print(f"Incident enregistre : Chauffeur {id_chauffeur} sur Ligne {id_ligne}, Bus {code_bus}")
+        return jsonify({"message": "Incident ajouté avec succès", "id": new_incident_id}), 201
     except Exception as e:
-        print(f"Erreur SQL: {e}")
+        print(f"Erreur SQL add_incident: {e}")
         return jsonify({"error": str(e)}), 500
     
 @app.route('/manage_parcours', methods=['POST'])
@@ -1575,6 +1652,8 @@ def delete_incident(id):
         conn.execute('DELETE FROM Incident WHERE ID_incident = ?', (id,))
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Incident', 'delete', match={'ID_incident': id})
         return jsonify({"status": "success", "message": "Incident supprimé"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1592,6 +1671,11 @@ def update_incident_status(id):
         )
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Incident', 'update',
+            {'Statut': statut, 'Performance_IA': critique},
+            {'ID_incident': id}
+        )
         return jsonify({"message": "Success"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
