@@ -1181,7 +1181,19 @@ def add_avis():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 0. RESOLUTION DES INFOS MANQUANTES (Pour garantir que ID_parcours n'est pas NULL)
+        # 0. RESOLUTION DU CLIENT : Flutter envoie ID_utilisateur, il faut trouver Code_client
+        true_client_id = None
+        if client_id:
+            res_client = cursor.execute("SELECT Code_client FROM Client WHERE ID_utilisateur = ?", (client_id,)).fetchone()
+            if res_client:
+                true_client_id = res_client['Code_client']
+            else:
+                # Auto-correction : le client n'a pas de profil Client (ancien compte)
+                cursor.execute("INSERT INTO Client (ID_utilisateur) VALUES (?)", (client_id,))
+                true_client_id = cursor.lastrowid
+                sync_to_supabase('Client', 'insert', {'Code_client': true_client_id, 'ID_utilisateur': client_id})
+        
+        # 1. RESOLUTION DES INFOS MANQUANTES (Pour garantir que ID_parcours n'est pas NULL)
         code_chauffeur = None
         code_ligne = None
         code_bus = None
@@ -1216,7 +1228,7 @@ def add_avis():
             (Code_client, ID_historique, ID_parcours, Note, Commentaire, Sentiment_score, Sentiment_label, Keywords, Category, Date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            client_id,
+            true_client_id,
             id_historique,
             parcours_id,
             note,
@@ -1274,7 +1286,7 @@ def add_avis():
 
         # 🔄 Sync vers Supabase
         sync_to_supabase('Avis', 'insert', {
-            'ID_avis': new_avis_id, 'Code_client': client_id, 'ID_historique': id_historique,
+            'ID_avis': new_avis_id, 'Code_client': true_client_id, 'ID_historique': id_historique,
             'ID_parcours': parcours_id, 'Note': note, 'Commentaire': comment,
             'Sentiment_score': sentiment_score, 'Sentiment_label': sentiment_label,
             'Keywords': keywords, 'Category': category, 'Date': date_avis
