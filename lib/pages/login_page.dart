@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../l10n/generated/app_localizations.dart';
-import '../language_provider.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart' show kIsWeb;
-
+import 'package:http/browser_client.dart'; 
+import '../l10n/generated/app_localizations.dart';
+import '../language_provider.dart';
+import '../api_config.dart';
 import 'current_user.dart';
 import 'clientdashboard.dart';
 import 'chauffeurdashboard.dart';
 import 'admin_dashboard.dart';
-import '../api_config.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -33,17 +32,22 @@ class _LoginPageState extends State<LoginPage> {
 
     setState(() => isLoading = true);
 
-    String apiUrl = "${ApiConfig.baseUrl}/login";
-
+    final String apiUrl = "https://smarttrans-projetkhawla.onrender.com/login";
+   
+    final client = BrowserClient();
+    print("قاعد نبعث للرابط: $apiUrl");
     try {
-      final response = await http.post(
+      final response = await client.post(
         Uri.parse(apiUrl),
-        headers: {"Content-Type": "application/json"},
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
         body: jsonEncode({
           "email": emailController.text.trim().toLowerCase(),
           "password": passwordController.text.trim(),
         }),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 60));
 
       var data = jsonDecode(response.body);
 
@@ -53,36 +57,25 @@ class _LoginPageState extends State<LoginPage> {
         await CurrentUser.saveSession(data["email"], data["role"], data["id"] ?? 1, userNom: nom, userPhoto: photo);
         int userId = CurrentUser.id;
 
-        _showSnackBar("${l10n.welcome} $nom (${CurrentUser.role})", Colors.green);
+        _showSnackBar("${l10n.welcome} $nom", Colors.green);
+
+        if (!mounted) return;
 
         if (CurrentUser.role == "client") {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ClientDashboard(clientId: userId, userEmail: CurrentUser.email),
-            ),
-          );
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ClientDashboard(clientId: userId, userEmail: CurrentUser.email)));
         } else if (CurrentUser.role == "chauffeur") {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ChauffeurDashboard(driverId: userId, userEmail: CurrentUser.email),
-            ),
-          );
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ChauffeurDashboard(driverId: userId, userEmail: CurrentUser.email)));
         } else if (CurrentUser.role == "admin") {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => AdminDashboard(adminEmail: CurrentUser.email),
-            ),
-          );
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => AdminDashboard(adminEmail: CurrentUser.email)));
         }
       } else {
         _showSnackBar(data['message'] ?? (l10n.localeName == 'fr' ? "Identifiants incorrects" : "Incorrect credentials"), Colors.red);
       }
     } catch (e) {
+      print("Error: $e");
       _showSnackBar(l10n.localeName == 'fr' ? "Erreur: Impossible de contacter le serveur" : "Error: Could not reach server", Colors.red);
     } finally {
+      client.close();
       if (mounted) setState(() => isLoading = false);
     }
   }
@@ -120,60 +113,17 @@ class _LoginPageState extends State<LoginPage> {
               children: [
                 const Icon(Icons.directions_bus, size: 90, color: Colors.teal),
                 const SizedBox(height: 10),
-                Text(
-                  l10n.appTitle,
-                  style: const TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.teal,
-                    letterSpacing: 2.0,
-                  ),
-                ),
-                  
+                Text(l10n.appTitle, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.teal, letterSpacing: 2.0)),
                 const SizedBox(height: 40),
-                TextField(
-                  controller: emailController,
-                  decoration: InputDecoration(
-                    labelText: l10n.email,
-                    prefixIcon: const Icon(Icons.email, color: Colors.teal),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                ),
+                TextField(controller: emailController, decoration: InputDecoration(labelText: l10n.email, prefixIcon: const Icon(Icons.email, color: Colors.teal), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                 const SizedBox(height: 15),
-                TextField(
-                  controller: passwordController,
-                  decoration: InputDecoration(
-                    labelText: l10n.password,
-                    prefixIcon: const Icon(Icons.lock, color: Colors.teal),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  obscureText: true,
-                ),
+                TextField(controller: passwordController, decoration: InputDecoration(labelText: l10n.password, prefixIcon: const Icon(Icons.lock, color: Colors.teal), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))), obscureText: true),
                 const SizedBox(height: 30),
-                isLoading
-                    ? const CircularProgressIndicator()
-                    : ElevatedButton(
-                        onPressed: login,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.teal,
-                          minimumSize: const Size(double.infinity, 55),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: Text(l10n.login, style: const TextStyle(color: Colors.white, fontSize: 18)),
-                      ),
+                isLoading ? const CircularProgressIndicator() : ElevatedButton(onPressed: login, style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text(l10n.login, style: const TextStyle(color: Colors.white, fontSize: 18))),
                 const SizedBox(height: 10),
-                TextButton(
-                  onPressed: () => Navigator.pushNamed(context, '/forgot_password'),
-                  child: Text(l10n.forgotPassword, style: const TextStyle(color: Colors.teal)),
-                ),
+                TextButton(onPressed: () => Navigator.pushNamed(context, '/forgot_password'), child: Text(l10n.forgotPassword, style: const TextStyle(color: Colors.teal))),
                 const SizedBox(height: 10),
-                TextButton(
-                  onPressed: () => Navigator.pushNamed(context, '/register'),
-                  child: Text(
-                    l10n.noAccount,
-                    style: const TextStyle(color: Colors.teal)
-                  ),
-                ),
+                TextButton(onPressed: () => Navigator.pushNamed(context, '/register'), child: Text(l10n.noAccount, style: const TextStyle(color: Colors.teal))),
               ],
             ),
           ),
@@ -186,17 +136,7 @@ class _LoginPageState extends State<LoginPage> {
     bool isSelected = provider.locale.languageCode == code;
     return TextButton(
       onPressed: () => provider.changeLanguage(code),
-      style: TextButton.styleFrom(
-        minimumSize: Size.zero,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: isSelected ? Colors.teal : Colors.grey,
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-        ),
-      ),
+      child: Text(label, style: TextStyle(color: isSelected ? Colors.teal : Colors.grey, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
     );
   }
 }
