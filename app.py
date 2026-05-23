@@ -902,12 +902,18 @@ def add_parcours():
         code_ligne = data.get('Code_Ligne')
 
         conn = get_db_connection()
-        conn.execute(
+        cur = conn.execute(
             'INSERT INTO Parcours (Depart, Arrivee, Heure_depart, Heure_arrivee, Code_Ligne) VALUES (?, ?, ?, ?, ?)',
             (depart, arrivee, heure_d, heure_a, code_ligne)
         )
+        new_parcours_id = cur.lastrowid
         conn.commit()
         conn.close()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Parcours', 'insert', {
+            'ID_parcours': new_parcours_id, 'Depart': depart, 'Arrivee': arrivee,
+            'Heure_depart': heure_d, 'Heure_arrivee': heure_a, 'Code_Ligne': code_ligne
+        })
         return jsonify({"message": "Success"}), 201
     except Exception as e:
         print(f"🚨 Erreur SQL: {e}")
@@ -937,6 +943,12 @@ def update_parcours(id):
         ))
         
         conn.commit()
+        # 🔄 Sync vers Supabase
+        sync_to_supabase('Parcours', 'update', {
+            'Depart': data.get('Depart'), 'Arrivee': data.get('Arrivee'),
+            'Heure_depart': data.get('Heure_depart'), 'Heure_arrivee': data.get('Heure_arrivee'),
+            'Code_Ligne': data.get('Code_Ligne')
+        }, {'ID_parcours': id})
         return jsonify({"status": "success", "message": "Mise à jour réussie"}), 200
     except Exception as e:
         print(f"UPDATE ERROR: {str(e)}")
@@ -979,6 +991,8 @@ def delete_parcours(id):
         conn.commit()
         
         if cur.rowcount > 0:
+            # 🔄 Sync vers Supabase
+            sync_to_supabase('Parcours', 'delete', match={'ID_parcours': id})
             return jsonify({"status": "success", "message": "Suppression réussie"}), 200
         else:
             return jsonify({"status": "error", "message": "Parcours non trouvé"}), 404
