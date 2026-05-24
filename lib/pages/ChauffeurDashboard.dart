@@ -4,7 +4,6 @@ import 'dart:convert';
 import '../api_config.dart';
 
 import 'package:intl/intl.dart';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'current_user.dart';
 import 'login_page.dart';
@@ -130,7 +129,7 @@ Future<void> fetchAllData() async {
         imageQuality: 75,
       );
       if (pickedFile != null) {
-        final bytes = await File(pickedFile.path).readAsBytes();
+        final bytes = await pickedFile.readAsBytes();
         String base64 = base64Encode(bytes);
         setState(() {
           CurrentUser.photo = base64;
