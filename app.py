@@ -998,6 +998,29 @@ def update_incident_status(id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/update_incident/<int:id>', methods=['PUT'])
+def update_incident(id):
+    try:
+        data = request.get_json()
+        description = data.get('Description', '')
+        statut = data.get('Statut', 'Signalé')
+        conn = get_db_connection()
+        conn.execute(
+            'UPDATE Incident SET Description = ?, Statut = ? WHERE ID_incident = ?',
+            (description, statut, id)
+        )
+        conn.commit()
+        conn.close()
+        sync_to_supabase('Incident', 'update',
+            {'Description': description, 'Statut': statut},
+            {'ID_incident': id}
+        )
+        return jsonify({"message": "Incident mis à jour"}), 200
+    except Exception as e:
+        print(f"Erreur update_incident: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/declare_incident', methods=['POST', 'OPTIONS'])
 def declare_incident():
     if request.method == 'OPTIONS':
@@ -1263,6 +1286,11 @@ def update_avis(id):
         )
         conn.commit()
         conn.close()
+        # ✅ FIX: sync Supabase ajoutée
+        sync_to_supabase('Avis', 'update',
+            {'Commentaire': commentaire, 'Note': note},
+            {'ID_avis': id}
+        )
         return jsonify({"message": "updated"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1275,6 +1303,8 @@ def delete_avis(id):
         conn.execute("DELETE FROM Avis WHERE ID_avis = ?", (id,))
         conn.commit()
         conn.close()
+        # ✅ FIX: sync Supabase ajoutée
+        sync_to_supabase('Avis', 'delete', match={'ID_avis': id})
         return jsonify({"message": "deleted"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
