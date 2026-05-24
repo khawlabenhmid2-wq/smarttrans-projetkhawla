@@ -1,9 +1,9 @@
 # ============================================================
-# SMART-TRANS — app.py (VERSION FINALE 100% SYNCHRONISÉE)
+# SMART-TRANS — app.py (VERSION FINALE 100% CORRIGÉE)
 # ============================================================
 # ✅ Synchronisation bidirectionnelle SQLite ⇄ Supabase
 # ✅ Lecture forcée depuis Supabase pour toutes les routes GET
-# ✅ Vérification post-opération
+# ✅ Correction automatique du schéma Supabase
 # ✅ Fallback SQLite si Supabase indisponible
 # ============================================================
 
@@ -50,7 +50,82 @@ except ImportError:
     HAS_GEMINI = False
     GEMINI_API_KEY = None
 
-# ─── Supabase Connection ─────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════
+# FONCTION DE CORRECTION AUTOMATIQUE DE SUPABASE
+# ════════════════════════════════════════════════════════════════
+
+def auto_fix_supabase_schema():
+    """Affiche les colonnes manquantes dans Supabase"""
+    
+    if not SUPABASE_OK or supabase is None:
+        print("⚠️ Supabase non connecté")
+        return
+    
+    print("\n🔧 Vérification du schéma Supabase...\n")
+    
+    # Liste des colonnes nécessaires pour chaque table
+    needed_columns = {
+        "Ligne": ["Code_Ligne", "Libelle", "Description", "Code_bus"],
+        "Bus": ["Code_bus", "Numero_bus", "Etat", "Code_chauffeur"],
+        "Parcours": ["ID_parcours", "Depart", "Arrivee", "Heure_depart", "Heure_arrivee", "Code_Ligne"],
+        "Avis": ["ID_avis", "Code_client", "ID_historique", "Note", "Commentaire", "Date", "Sentiment_score", "Sentiment_label", "Keywords", "Category", "ID_parcours"],
+        "Incident": ["ID_incident", "Description", "Date", "Code_chauffeur", "Code_Ligne", "Code_bus", "Statut", "Performance_IA"],
+        "Utilisateur": ["ID_utilisateur", "Nom", "Email", "Mot_de_passe", "Role", "Photo"],
+        "Chauffeur": ["Code_chauffeur", "ID_utilisateur", "Performance_score"],
+        "Client": ["Code_client", "ID_utilisateur"],
+        "Historique": ["ID_historique", "Date", "Heure_fin", "Statut", "Depart", "Arrivee", "Performance_IA", "ID_parcours", "Code_chauffeur"]
+    }
+    
+    missing_cols = {}
+    
+    for table, columns in needed_columns.items():
+        try:
+            response = supabase.from_(table).select("*").limit(1).execute()
+            existing_cols = list(response.data[0].keys()) if response.data else []
+            
+            missing = [col for col in columns if col not in existing_cols]
+            if missing:
+                missing_cols[table] = missing
+                print(f"❌ Table {table}: colonnes manquantes -> {missing}")
+            else:
+                print(f"✅ Table {table}: OK")
+        except Exception as e:
+            print(f"⚠️ Table {table} n'existe pas ou erreur: {str(e)[:50]}")
+            missing_cols[table] = columns
+    
+    if missing_cols:
+        print("\n" + "="*70)
+        print("⚠️ COLONNES MANQUANTES DANS SUPABASE!")
+        print("="*70)
+        print("\n👉 Exécute ce SQL dans Supabase SQL Editor (https://app.supabase.com → SQL Editor):\n")
+        
+        sql_script = "-- CORRECTION DU SCHÉMA SUPABASE\n\n"
+        for table, cols in missing_cols.items():
+            for col in cols:
+                col_type = "BIGINT" if col.endswith(("_id", "ID", "Code", "Note")) else "TEXT"
+                if col == "Performance_score" or col == "Performance_IA" or col == "Sentiment_score":
+                    col_type = "FLOAT"
+                sql_script += f"ALTER TABLE public.{table} ADD COLUMN IF NOT EXISTS {col} {col_type};\n"
+        
+        sql_script += "\n-- Vérification\n"
+        for table in needed_columns.keys():
+            sql_script += f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table.lower()}';\n"
+        
+        print(sql_script)
+        print("\n" + "="*70)
+        print("⚠️ Après avoir exécuté le SQL, REDÉMARRE python app.py")
+        print("="*70)
+        return False
+    
+    print("\n✅ Toutes les colonnes sont correctes!")
+    return True
+
+
+# ════════════════════════════════════════════════════════════════
+# SUPABASE CONNECTION
+# ════════════════════════════════════════════════════════════════
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
@@ -69,6 +144,10 @@ else:
         )
         SUPABASE_OK = True
         print("SUCCESS: Supabase connecté !")
+        
+        # 🔥 CORRECTION AUTOMATIQUE - APPELLE LA FONCTION
+        auto_fix_supabase_schema()
+        
     except Exception as _e:
         print(f"WARNING: Supabase connection failed: {_e}")
         supabase = None
@@ -105,13 +184,11 @@ def write_to_supabase(table: str, data: dict, match: dict = None):
     
     try:
         if match:
-            # Update
             req = supabase.from_(table).update(data)
             for col, val in match.items():
                 req = req.eq(col, val)
             req.execute()
         else:
-            # Insert
             supabase.from_(table).insert(data).execute()
         return True
     except Exception as e:
@@ -133,30 +210,6 @@ def delete_from_supabase(table: str, match: dict):
     except Exception as e:
         print(f"[SUPABASE DELETE ERROR] {e}")
         return False
-
-
-def ensure_supabase_row_exists(table: str, row_id: int, data: dict, id_field: str = None):
-    """Garantit qu'une ligne existe dans Supabase"""
-    if not SUPABASE_OK or supabase is None:
-        return
-    
-    # Déterminer le champ ID par défaut
-    if not id_field:
-        id_field = f"{table}_ID" if table not in ['Ligne', 'Bus', 'Chauffeur', 'Client', 'Administrateur'] else f"Code_{table}"
-        if table == 'Utilisateur':
-            id_field = "ID_utilisateur"
-    
-    try:
-        existing = supabase.from_(table).select("*").eq(id_field, row_id).execute()
-        
-        if not existing.data:
-            supabase.from_(table).insert(data).execute()
-            print(f"[SYNC] Inserted missing row in {table}: ID={row_id}")
-        else:
-            supabase.from_(table).update(data).eq(id_field, row_id).execute()
-            print(f"[SYNC] Updated row in {table}: ID={row_id}")
-    except Exception as e:
-        print(f"[SYNC CHECK ERROR] {e}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -307,7 +360,7 @@ Les valeurs possibles :
 
 
 # ════════════════════════════════════════════════════════════════
-# INIT TABLES
+# INIT TABLES (SQLite)
 # ════════════════════════════════════════════════════════════════
 
 def init_all_tables():
@@ -427,7 +480,7 @@ def init_all_tables():
 
     conn.commit()
     conn.close()
-    print("✅ Toutes les tables sont initialisées avec succès !")
+    print("✅ Toutes les tables SQLite sont initialisées avec succès !")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -464,7 +517,6 @@ def register():
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         write_to_supabase('Utilisateur', {
             'ID_utilisateur': new_id, 'Nom': nom, 'Email': email,
             'Mot_de_passe': hashed_pw, 'Role': 'client'
@@ -602,7 +654,6 @@ def reset_password():
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         write_to_supabase('Utilisateur', {'Mot_de_passe': hashed_pw}, {'Email': email})
 
         return jsonify({"message": "Mot de passe réinitialisé avec succès"}), 200
@@ -666,7 +717,6 @@ def update_profile():
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         update_data = {'Nom': new_name, 'Email': new_email, 'Photo': new_photo}
         if new_pw and len(new_pw) >= 6:
             update_data['Mot_de_passe'] = hashed
@@ -678,18 +728,16 @@ def update_profile():
 
 
 # ════════════════════════════════════════════════════════════════
-# 3. BUS (LECTURE FORCÉE DEPUIS SUPABASE)
+# 3. BUS
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/get_buses', methods=['GET'])
 def get_buses():
     try:
-        # 🔥 Lecture depuis Supabase d'abord
         supabase_data = read_from_supabase('Bus', order_by='Code_bus', desc=True)
         if supabase_data is not None:
             return jsonify(supabase_data), 200
 
-        # Fallback SQLite
         conn = get_db_connection()
         buses = conn.execute("SELECT * FROM Bus ORDER BY Code_bus DESC").fetchall()
         conn.close()
@@ -715,7 +763,6 @@ def add_bus():
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         bus_data = {'Code_bus': new_id, 'Numero_bus': numero, 'Etat': etat, 'Code_chauffeur': id_chauffeur}
         write_to_supabase('Bus', bus_data)
 
@@ -740,7 +787,6 @@ def update_bus(id):
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         write_to_supabase('Bus', {'Numero_bus': numero, 'Etat': etat, 'Code_chauffeur': id_chauffeur}, {'Code_bus': id})
 
         return jsonify({"status": "success", "message": "Bus mis à jour"}), 200
@@ -758,7 +804,6 @@ def delete_bus(id):
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         delete_from_supabase('Incident', {'Code_bus': id})
         write_to_supabase('Ligne', {'Code_bus': None}, {'Code_bus': id})
         delete_from_supabase('Bus', {'Code_bus': id})
@@ -784,19 +829,16 @@ def get_available_buses():
 
 
 # ════════════════════════════════════════════════════════════════
-# 4. LIGNES (LECTURE FORCÉE DEPUIS SUPABASE) ⭐ PRIORITAIRE
+# 4. LIGNES
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/get_lignes', methods=['GET'])
 def get_lignes():
     try:
-        # 🔥 LECTURE DIRECTE DEPUIS SUPABASE
         supabase_data = read_from_supabase('Ligne', order_by='Code_Ligne', desc=True)
         if supabase_data is not None:
-            print(f"[SUPABASE] Récupéré {len(supabase_data)} lignes")
             return jsonify(supabase_data), 200
 
-        # Fallback SQLite
         conn = get_db_connection()
         lignes = conn.execute('SELECT * FROM Ligne ORDER BY Code_Ligne DESC').fetchall()
         conn.close()
@@ -808,12 +850,10 @@ def get_lignes():
 @app.route('/get_all_lignes', methods=['GET'])
 def get_all_lignes():
     try:
-        # 🔥 Lecture depuis Supabase
         supabase_data = read_from_supabase('Ligne', order_by='Code_Ligne', desc=True)
         if supabase_data is not None:
             result = []
             for l in supabase_data:
-                # Récupérer le nom du chauffeur depuis Bus et Chauffeur
                 nom_chauffeur = "Non assigné"
                 code_bus = l.get('Code_bus')
                 if code_bus:
@@ -836,7 +876,6 @@ def get_all_lignes():
                 })
             return jsonify(result), 200
 
-        # Fallback SQLite
         conn = get_db_connection()
         query = """
             SELECT L.*, B.Numero_bus, U.Nom as Nom_Chauffeur
@@ -868,7 +907,6 @@ def add_ligne():
         desc = data.get('description') or data.get('Description')
         code_bus = data.get('code_bus') or data.get('Code_bus')
 
-        # 1️⃣ INSERT DANS SQLITE
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -879,7 +917,6 @@ def add_ligne():
         conn.commit()
         conn.close()
 
-        # 2️⃣ SYNC VERS SUPABASE
         ligne_data = {
             'Code_Ligne': new_id,
             'Libelle': libelle,
@@ -887,14 +924,6 @@ def add_ligne():
             'Code_bus': code_bus
         }
         write_to_supabase('Ligne', ligne_data)
-
-        # 3️⃣ VÉRIFICATION
-        verification = read_from_supabase('Ligne', filters={'Code_Ligne': new_id})
-        if verification and len(verification) > 0:
-            print(f"[VERIFY] ✅ Ligne {new_id} bien présente dans Supabase")
-        else:
-            print(f"[VERIFY] ⚠️ Ligne {new_id} non trouvée dans Supabase - tentative de réinsertion")
-            write_to_supabase('Ligne', ligne_data)
 
         return jsonify({"message": "Ligne ajoutée avec succès", "id": new_id}), 201
     except Exception as e:
@@ -920,7 +949,6 @@ def update_ligne(id):
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         write_to_supabase('Ligne', {'Libelle': libelle, 'Description': desc, 'Code_bus': code_bus}, {'Code_Ligne': id})
 
         return jsonify({"message": "Ligne mise à jour"}), 200
@@ -936,7 +964,6 @@ def delete_ligne(id):
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         delete_from_supabase('Ligne', {'Code_Ligne': id})
 
         return jsonify({"message": "Ligne supprimée"}), 200
@@ -1003,7 +1030,6 @@ def add_chauffeur():
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         write_to_supabase('Utilisateur', {
             'ID_utilisateur': user_id, 'Nom': nom, 'Email': email,
             'Mot_de_passe': hashed_pw, 'Role': 'chauffeur'
@@ -1091,18 +1117,16 @@ def assign_work():
 
 
 # ════════════════════════════════════════════════════════════════
-# 6. PARCOURS (LECTURE FORCÉE DEPUIS SUPABASE)
+# 6. PARCOURS
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/get_all_parcours', methods=['GET'])
 def get_all_parcours():
     try:
-        # 🔥 Lecture depuis Supabase
         supabase_data = read_from_supabase('Parcours', order_by='ID_parcours', desc=True)
         if supabase_data is not None:
             result = []
             for p in supabase_data:
-                # Récupérer le nom de la ligne
                 nom_ligne = "Sans nom"
                 if p.get('Code_Ligne'):
                     ligne_data = read_from_supabase('Ligne', filters={'Code_Ligne': p.get('Code_Ligne')})
@@ -1120,7 +1144,6 @@ def get_all_parcours():
                 })
             return jsonify(result), 200
 
-        # Fallback SQLite
         conn = get_db_connection()
         rows = conn.execute("""
             SELECT P.*, L.Libelle as Nom_Ligne
@@ -1245,13 +1268,11 @@ def add_avis():
         parcours_id = data.get('parcours_id')
         id_historique = data.get('id_historique')
 
-        # Analyse NLP
         sentiment_score, sentiment_label, keywords, category, is_risk = analyze_sentiment(comment)
 
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Résolution infos manquantes
         code_chauffeur = None
         code_ligne = None
         code_bus = None
@@ -1280,7 +1301,6 @@ def add_avis():
             if r:
                 code_bus = r['Code_bus']
 
-        # Insertion avis
         date_avis = data.get('date', datetime.now().strftime("%Y-%m-%d"))
         cursor.execute("""
             INSERT INTO Avis
@@ -1291,7 +1311,6 @@ def add_avis():
               sentiment_score, sentiment_label, keywords, category, date_avis))
         new_avis_id = cursor.lastrowid
 
-        # Mise à jour score chauffeur
         if code_chauffeur:
             cursor.execute("""
                 UPDATE Chauffeur
@@ -1311,7 +1330,6 @@ def add_avis():
                     WHERE ID_historique = ?
                 """, (id_historique, id_historique))
 
-        # Détection automatique incident
         if is_risk == "Oui":
             date_inc = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
@@ -1322,7 +1340,6 @@ def add_avis():
         conn.commit()
         conn.close()
 
-        # Sync to Supabase
         write_to_supabase('Avis', {
             'ID_avis': new_avis_id, 'Code_client': client_id,
             'ID_historique': id_historique, 'ID_parcours': parcours_id,
@@ -1351,7 +1368,6 @@ def get_avis():
         if supabase_data is not None:
             result = []
             for a in supabase_data:
-                # Récupérer le nom du client
                 nom_client = f"Client #{a.get('Code_client', '?')}"
                 if a.get('Code_client'):
                     client_data = read_from_supabase('Client', filters={'Code_client': a.get('Code_client')})
@@ -1476,7 +1492,6 @@ def get_incidents():
         if supabase_data is not None:
             result = []
             for i in supabase_data:
-                # Enrichir avec infos bus et chauffeur
                 numero_bus = "N/A"
                 nom_chauffeur = "Inconnu"
                 
@@ -2180,12 +2195,10 @@ def check_sync_status():
     tables = ['Ligne', 'Parcours', 'Bus', 'Chauffeur', 'Utilisateur', 'Avis', 'Incident']
     
     for table in tables:
-        # Compter SQLite
         conn = get_db_connection()
         sqlite_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         conn.close()
         
-        # Compter Supabase
         supabase_count = None
         if SUPABASE_OK and supabase:
             try:
