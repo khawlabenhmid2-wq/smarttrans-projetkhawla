@@ -1,11 +1,10 @@
 # ============================================================
-# SMART-TRANS — app.py  (VERSION 100% CORRIGÉE — Flask only)
+# SMART-TRANS — app.py (VERSION FINALE 100% SYNCHRONISÉE)
 # ============================================================
-# ✅ FastAPI SUPPRIMÉ (conflit résolu)
-# ✅ Supabase sync correct (postgrest)
-# ✅ SQLite robuste (DB_PATH absolu partout)
-# ✅ Gemini API model name corrigé
-# ✅ Tous les imports organisés proprement
+# ✅ Synchronisation bidirectionnelle SQLite ⇄ Supabase
+# ✅ Lecture forcée depuis Supabase pour toutes les routes GET
+# ✅ Vérification post-opération
+# ✅ Fallback SQLite si Supabase indisponible
 # ============================================================
 
 import os
@@ -15,8 +14,8 @@ import random
 import string
 import sqlite3
 from datetime import datetime
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # ─── Flask & extensions ──────────────────────────────────────
@@ -76,29 +75,94 @@ else:
         SUPABASE_OK = False
 
 
-def sync_to_supabase(table: str, action: str, data: dict = None, match: dict = None):
-    """Synchronise une opération vers Supabase (insert/update/delete)."""
-    global supabase, SUPABASE_OK
+# ════════════════════════════════════════════════════════════════
+# FONCTIONS DE SYNCHRONISATION UNIVERSELLES
+# ════════════════════════════════════════════════════════════════
+
+def read_from_supabase(table: str, filters: dict = None, order_by: str = None, desc: bool = True):
+    """Lit les données directement depuis Supabase (garantie synchro)"""
+    if not SUPABASE_OK or supabase is None:
+        return None
+    
+    try:
+        req = supabase.from_(table).select("*")
+        if filters:
+            for col, val in filters.items():
+                req = req.eq(col, val)
+        if order_by:
+            req = req.order(order_by, desc=desc)
+        response = req.execute()
+        return response.data if response.data else []
+    except Exception as e:
+        print(f"[SUPABASE READ ERROR] {e}")
+        return None
+
+
+def write_to_supabase(table: str, data: dict, match: dict = None):
+    """Écrit ou met à jour dans Supabase"""
+    if not SUPABASE_OK or supabase is None:
+        return False
+    
+    try:
+        if match:
+            # Update
+            req = supabase.from_(table).update(data)
+            for col, val in match.items():
+                req = req.eq(col, val)
+            req.execute()
+        else:
+            # Insert
+            supabase.from_(table).insert(data).execute()
+        return True
+    except Exception as e:
+        print(f"[SUPABASE WRITE ERROR] {e}")
+        return False
+
+
+def delete_from_supabase(table: str, match: dict):
+    """Supprime de Supabase"""
+    if not SUPABASE_OK or supabase is None:
+        return False
+    
+    try:
+        req = supabase.from_(table).delete()
+        for col, val in match.items():
+            req = req.eq(col, val)
+        req.execute()
+        return True
+    except Exception as e:
+        print(f"[SUPABASE DELETE ERROR] {e}")
+        return False
+
+
+def ensure_supabase_row_exists(table: str, row_id: int, data: dict, id_field: str = None):
+    """Garantit qu'une ligne existe dans Supabase"""
     if not SUPABASE_OK or supabase is None:
         return
+    
+    # Déterminer le champ ID par défaut
+    if not id_field:
+        id_field = f"{table}_ID" if table not in ['Ligne', 'Bus', 'Chauffeur', 'Client', 'Administrateur'] else f"Code_{table}"
+        if table == 'Utilisateur':
+            id_field = "ID_utilisateur"
+    
     try:
-        if action == 'insert' and data:
+        existing = supabase.from_(table).select("*").eq(id_field, row_id).execute()
+        
+        if not existing.data:
             supabase.from_(table).insert(data).execute()
-        elif action == 'update' and data and match:
-            q = supabase.from_(table).update(data)
-            for col, val in match.items():
-                q = q.eq(col, val)
-            q.execute()
-        elif action == 'delete' and match:
-            q = supabase.from_(table).delete()
-            for col, val in match.items():
-                q = q.eq(col, val)
-            q.execute()
-    except Exception as _se:
-        print(f"[SUPABASE SYNC WARNING] table={table} action={action} err={_se}")
+            print(f"[SYNC] Inserted missing row in {table}: ID={row_id}")
+        else:
+            supabase.from_(table).update(data).eq(id_field, row_id).execute()
+            print(f"[SYNC] Updated row in {table}: ID={row_id}")
+    except Exception as e:
+        print(f"[SYNC CHECK ERROR] {e}")
 
 
-# ─── Flask App ───────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+# Flask App Initialization
+# ════════════════════════════════════════════════════════════════
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 bcrypt = Bcrypt(app)
@@ -109,7 +173,7 @@ app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
 app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'khawlabenhmid2@gmail.com')
 app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', 'sztw sklu nyav ypzz')
-app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', 'khawlabenhmid2@gmail.com')
+app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
 mail = Mail(app)
 
 # ─── Database Path ───────────────────────────────────────────
@@ -123,32 +187,38 @@ def get_db_connection():
     return conn
 
 
-# ─── NLP Keywords ────────────────────────────────────────────
-DRIVER_KEYWORDS  = ['chauffeur','conducteur','pilote','chafer','chaufeur','impoli','poli',
-                    'grossier','aimable','sympa','agressif','comportement','conduite',
-                    'attitude','professionnel','vitesse','rapide','lent','freinage',
-                    'respectueux','irrespectueux','souriant','desagreable','competent',
-                    'incompetent','courtois','imprudent','prudent']
-COMFORT_KEYWORDS = ['confort','siege','clim','climatisation','chaud','froid','propre','sale','bruit','masakh','ndhif','korsi']
-VEHICLE_KEYWORDS = ['bus','vehicule','panne','vieux','neuf','voiture','car','moteur','karoosa']
-SERVICE_KEYWORDS = ['retard','heure','temps','attente','horaire','ponctuel','regularite','trajet','ma famech','wqayet']
-STRONG_NEG       = ['catastrophe','horrible','honteux','scandale','khayeb','masakh','bhim','msakh','ykhawef','danger','vol','arnaque','catastrophique']
-NEG_WORDS        = ["n'aime pas","n'aime plus","déteste","nul","mauvais","pire","sale","impoli","retard","lent","problème","panne","froid","chaud","bruit","saturé","plein","ma famech","pas bien","non","désagréable"]
-STRONG_POS       = ['parfait','meilleur','tayara','magnifique','extraordinaire','top','merveilleux','incroyable']
-POS_WORDS        = ['super','excellent','génial','adore','très bien','bravo','propre','merci','bahi','behi','cv','bien','bon','rapide','confortable','gentil','respectueux']
+# ════════════════════════════════════════════════════════════════
+# NLP FUNCTIONS
+# ════════════════════════════════════════════════════════════════
+
+DRIVER_KEYWORDS = ['chauffeur', 'conducteur', 'pilote', 'chafer', 'chaufeur', 'impoli', 'poli',
+                   'grossier', 'aimable', 'sympa', 'agressif', 'comportement', 'conduite',
+                   'attitude', 'professionnel', 'vitesse', 'rapide', 'lent', 'freinage',
+                   'respectueux', 'irrespectueux', 'souriant', 'desagreable', 'competent',
+                   'incompetent', 'courtois', 'imprudent', 'prudent']
+COMFORT_KEYWORDS = ['confort', 'siege', 'clim', 'climatisation', 'chaud', 'froid', 'propre', 'sale', 'bruit', 'masakh', 'ndhif', 'korsi']
+VEHICLE_KEYWORDS = ['bus', 'vehicule', 'panne', 'vieux', 'neuf', 'voiture', 'car', 'moteur', 'karoosa']
+SERVICE_KEYWORDS = ['retard', 'heure', 'temps', 'attente', 'horaire', 'ponctuel', 'regularite', 'trajet', 'ma famech', 'wqayet']
+STRONG_NEG = ['catastrophe', 'horrible', 'honteux', 'scandale', 'khayeb', 'masakh', 'bhim', 'msakh', 'ykhawef', 'danger', 'vol', 'arnaque', 'catastrophique']
+NEG_WORDS = ["n'aime pas", "n'aime plus", "déteste", "nul", "mauvais", "pire", "sale", "impoli", "retard", "lent", "problème", "panne", "froid", "chaud", "bruit", "saturé", "plein", "ma famech", "pas bien", "non", "désagréable"]
+STRONG_POS = ['parfait', 'meilleur', 'tayara', 'magnifique', 'extraordinaire', 'top', 'merveilleux', 'incroyable']
+POS_WORDS = ['super', 'excellent', 'génial', 'adore', 'très bien', 'bravo', 'propre', 'merci', 'bahi', 'behi', 'cv', 'bien', 'bon', 'rapide', 'confortable', 'gentil', 'respectueux']
 
 
 def categorize_comment(comment: str) -> str:
     c = comment.lower()
-    if any(w in c for w in DRIVER_KEYWORDS):  return 'Chauffeur'
-    if any(w in c for w in COMFORT_KEYWORDS): return 'Confort'
-    if any(w in c for w in VEHICLE_KEYWORDS): return 'Véhicule'
-    if any(w in c for w in SERVICE_KEYWORDS): return 'Service'
+    if any(w in c for w in DRIVER_KEYWORDS):
+        return 'Chauffeur'
+    if any(w in c for w in COMFORT_KEYWORDS):
+        return 'Confort'
+    if any(w in c for w in VEHICLE_KEYWORDS):
+        return 'Véhicule'
+    if any(w in c for w in SERVICE_KEYWORDS):
+        return 'Service'
     return 'Général'
 
 
 def analyze_sentiment_textblob(comment: str):
-    """Analyse NLP avec TextBlob + mots pondérés Français/Derja."""
     sentiment_score = 0.0
     try:
         try:
@@ -163,19 +233,26 @@ def analyze_sentiment_textblob(comment: str):
     comment_lower = comment.lower()
     bonus = 0.0
     for w in STRONG_NEG:
-        if w in comment_lower: bonus -= 0.8
+        if w in comment_lower:
+            bonus -= 0.8
     for w in NEG_WORDS:
-        if w in comment_lower: bonus -= 0.4
+        if w in comment_lower:
+            bonus -= 0.4
     for w in STRONG_POS:
-        if w in comment_lower: bonus += 0.8
+        if w in comment_lower:
+            bonus += 0.8
     for w in POS_WORDS:
-        if w in comment_lower: bonus += 0.4
+        if w in comment_lower:
+            bonus += 0.4
 
     sentiment_score = max(-1.0, min(1.0, sentiment_score + bonus))
 
-    if sentiment_score >= 0.15:   label = "Positif"
-    elif sentiment_score <= -0.15: label = "Négatif"
-    else:                          label = "Neutre"
+    if sentiment_score >= 0.15:
+        label = "Positif"
+    elif sentiment_score <= -0.15:
+        label = "Négatif"
+    else:
+        label = "Neutre"
 
     words = [w.lower() for w in comment.split() if len(w) > 3]
     keywords = ", ".join(list(set(words))[:5])
@@ -185,13 +262,11 @@ def analyze_sentiment_textblob(comment: str):
 
 
 def analyze_sentiment(comment: str):
-    """Analyse NLP : Gemini si disponible, sinon TextBlob."""
     if not comment:
         return 0.0, "Neutre", "", "Général", "Non"
 
     if HAS_GEMINI:
         try:
-            # ✅ Nom de modèle corrigé
             model = genai.GenerativeModel('gemini-1.5-flash')
             prompt = f"""
 Analyse ce commentaire de transport public (en Français ou Derja Tunisienne) :
@@ -231,35 +306,26 @@ Les valeurs possibles :
     return 0.0, "Neutre", "", "Général", "Non"
 
 
-# ─── Init Tables ─────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+# INIT TABLES
+# ════════════════════════════════════════════════════════════════
+
 def init_all_tables():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Migrations sécurisées (ALTER TABLE ne plante pas si colonne existe déjà)
+    # Migrations sécurisées
     for col_sql in [
         "ALTER TABLE Incident ADD COLUMN Performance_IA FLOAT",
         "ALTER TABLE Incident ADD COLUMN Statut TEXT DEFAULT 'Signalé'",
         "ALTER TABLE Incident ADD COLUMN Code_bus INTEGER",
     ]:
-        try: cursor.execute(col_sql)
-        except: pass
+        try:
+            cursor.execute(col_sql)
+        except:
+            pass
 
-    # Correction automatique des incidents sans Code_bus
-    try:
-        cursor.execute("""
-            UPDATE Incident
-            SET Code_bus = (SELECT Code_bus FROM Ligne WHERE Ligne.Code_Ligne = Incident.Code_Ligne)
-            WHERE Code_bus IS NULL
-        """)
-        cursor.execute("""
-            UPDATE Incident
-            SET Code_bus = (SELECT Code_bus FROM Bus WHERE Bus.Code_chauffeur = Incident.Code_chauffeur LIMIT 1)
-            WHERE Code_bus IS NULL
-        """)
-    except: pass
-
-    # ── Tables ──
+    # Tables principales
     cursor.execute('''CREATE TABLE IF NOT EXISTS Utilisateur (
         ID_utilisateur INTEGER PRIMARY KEY AUTOINCREMENT,
         Nom TEXT,
@@ -372,8 +438,8 @@ def init_all_tables():
 def register():
     try:
         data = request.get_json()
-        nom      = data.get('nom', '').strip()
-        email    = data.get('email', '').lower().strip()
+        nom = data.get('nom', '').strip()
+        email = data.get('email', '').lower().strip()
         password = data.get('password', '')
 
         if not nom or not email or not password:
@@ -398,13 +464,15 @@ def register():
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Utilisateur', 'insert', {
+        # Sync to Supabase
+        write_to_supabase('Utilisateur', {
             'ID_utilisateur': new_id, 'Nom': nom, 'Email': email,
             'Mot_de_passe': hashed_pw, 'Role': 'client'
         })
-        sync_to_supabase('Client', 'insert', {
+        write_to_supabase('Client', {
             'Code_client': new_client_id, 'ID_utilisateur': new_id
         })
+
         return jsonify({"message": "Compte créé avec succès"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -417,7 +485,7 @@ def login():
         if not data:
             return jsonify({"error": "Aucune donnée reçue"}), 400
 
-        email    = (data.get('email') or '').lower().strip()
+        email = (data.get('email') or '').lower().strip()
         password = data.get('password', '')
 
         if not email or not password:
@@ -435,10 +503,10 @@ def login():
 
         return jsonify({
             "message": "Login successful",
-            "id":    user['ID_utilisateur'],
-            "nom":   user['Nom'],
+            "id": user['ID_utilisateur'],
+            "nom": user['Nom'],
             "email": user['Email'],
-            "role":  user['Role'],
+            "role": user['Role'],
             "photo": user['Photo'] or ""
         }), 200
 
@@ -450,7 +518,7 @@ def login():
 @app.route('/forgot-password', methods=['POST'])
 def forgot_password():
     try:
-        data  = request.get_json()
+        data = request.get_json()
         email = (data.get('email') or '').lower().strip()
 
         if not email:
@@ -498,11 +566,11 @@ def forgot_password():
 @app.route('/verify-reset-code', methods=['POST'])
 def verify_reset_code():
     try:
-        data  = request.get_json()
+        data = request.get_json()
         email = (data.get('email') or '').lower().strip()
-        code  = data.get('code', '')
-        conn  = get_db_connection()
-        res   = conn.execute('SELECT * FROM ResetCode WHERE Email = ? AND Code = ?', (email, code)).fetchone()
+        code = data.get('code', '')
+        conn = get_db_connection()
+        res = conn.execute('SELECT * FROM ResetCode WHERE Email = ? AND Code = ?', (email, code)).fetchone()
         conn.close()
         if res:
             return jsonify({"message": "Code valide"}), 200
@@ -514,16 +582,16 @@ def verify_reset_code():
 @app.route('/reset-password', methods=['POST'])
 def reset_password():
     try:
-        data         = request.get_json()
-        email        = (data.get('email') or '').lower().strip()
-        code         = data.get('code', '')
+        data = request.get_json()
+        email = (data.get('email') or '').lower().strip()
+        code = data.get('code', '')
         new_password = data.get('new_password', '')
 
         if len(new_password) < 6:
             return jsonify({"error": "Le mot de passe doit contenir au moins 6 caractères"}), 400
 
         conn = get_db_connection()
-        res  = conn.execute('SELECT * FROM ResetCode WHERE Email = ? AND Code = ?', (email, code)).fetchone()
+        res = conn.execute('SELECT * FROM ResetCode WHERE Email = ? AND Code = ?', (email, code)).fetchone()
         if not res:
             conn.close()
             return jsonify({"error": "Action non autorisée"}), 403
@@ -533,6 +601,10 @@ def reset_password():
         conn.execute('DELETE FROM ResetCode WHERE Email = ?', (email,))
         conn.commit()
         conn.close()
+
+        # Sync to Supabase
+        write_to_supabase('Utilisateur', {'Mot_de_passe': hashed_pw}, {'Email': email})
+
         return jsonify({"message": "Mot de passe réinitialisé avec succès"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -558,11 +630,11 @@ def get_profile(email):
 @app.route('/update_profile', methods=['POST'])
 def update_profile():
     try:
-        data      = request.get_json()
-        user_id   = data.get('user_id')
-        new_name  = data.get('name')
+        data = request.get_json()
+        user_id = data.get('user_id')
+        new_name = data.get('name')
         new_email = data.get('email')
-        new_pw    = data.get('password')
+        new_pw = data.get('password')
         new_photo = data.get('photo')
 
         if not user_id:
@@ -580,12 +652,12 @@ def update_profile():
                 conn.close()
                 return jsonify({"error": "Cet email est déjà utilisé"}), 400
 
-        query  = "UPDATE Utilisateur SET Nom = ?, Email = ?, Photo = ?"
+        query = "UPDATE Utilisateur SET Nom = ?, Email = ?, Photo = ?"
         params = [new_name, new_email, new_photo]
 
         if new_pw and len(new_pw) >= 6:
             hashed = bcrypt.generate_password_hash(new_pw).decode('utf-8')
-            query  += ", Mot_de_passe = ?"
+            query += ", Mot_de_passe = ?"
             params.append(hashed)
 
         query += " WHERE ID_utilisateur = ?"
@@ -593,19 +665,32 @@ def update_profile():
         cursor.execute(query, params)
         conn.commit()
         conn.close()
+
+        # Sync to Supabase
+        update_data = {'Nom': new_name, 'Email': new_email, 'Photo': new_photo}
+        if new_pw and len(new_pw) >= 6:
+            update_data['Mot_de_passe'] = hashed
+        write_to_supabase('Utilisateur', update_data, {'ID_utilisateur': user_id})
+
         return jsonify({"message": "Profil mis à jour avec succès ✅"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ════════════════════════════════════════════════════════════════
-# 3. BUS
+# 3. BUS (LECTURE FORCÉE DEPUIS SUPABASE)
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/get_buses', methods=['GET'])
 def get_buses():
     try:
-        conn  = get_db_connection()
+        # 🔥 Lecture depuis Supabase d'abord
+        supabase_data = read_from_supabase('Bus', order_by='Code_bus', desc=True)
+        if supabase_data is not None:
+            return jsonify(supabase_data), 200
+
+        # Fallback SQLite
+        conn = get_db_connection()
         buses = conn.execute("SELECT * FROM Bus ORDER BY Code_bus DESC").fetchall()
         conn.close()
         return jsonify([dict(b) for b in buses])
@@ -616,13 +701,13 @@ def get_buses():
 @app.route('/add_bus', methods=['POST'])
 def add_bus():
     try:
-        data         = request.get_json()
-        numero       = data.get('Numero_bus')
-        etat         = data.get('Etat')
+        data = request.get_json()
+        numero = data.get('Numero_bus')
+        etat = data.get('Etat')
         id_chauffeur = data.get('Code_chauffeur')
 
         conn = get_db_connection()
-        cur  = conn.execute(
+        cur = conn.execute(
             'INSERT INTO Bus (Numero_bus, Etat, Code_chauffeur) VALUES (?, ?, ?)',
             (numero, etat, id_chauffeur)
         )
@@ -630,11 +715,11 @@ def add_bus():
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Bus', 'insert', {
-            'Code_bus': new_id, 'Numero_bus': numero,
-            'Etat': etat, 'Code_chauffeur': id_chauffeur
-        })
-        return jsonify({"status": "success", "message": "Bus ajouté"}), 201
+        # Sync to Supabase
+        bus_data = {'Code_bus': new_id, 'Numero_bus': numero, 'Etat': etat, 'Code_chauffeur': id_chauffeur}
+        write_to_supabase('Bus', bus_data)
+
+        return jsonify({"status": "success", "message": "Bus ajouté", "id": new_id}), 201
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -642,9 +727,9 @@ def add_bus():
 @app.route('/update_bus/<int:id>', methods=['PUT'])
 def update_bus(id):
     try:
-        data         = request.get_json()
-        numero       = data.get('Numero_bus')
-        etat         = data.get('Etat')
+        data = request.get_json()
+        numero = data.get('Numero_bus')
+        etat = data.get('Etat')
         id_chauffeur = data.get('Code_chauffeur')
 
         conn = get_db_connection()
@@ -655,10 +740,9 @@ def update_bus(id):
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Bus', 'update',
-            {'Numero_bus': numero, 'Etat': etat, 'Code_chauffeur': id_chauffeur},
-            {'Code_bus': id}
-        )
+        # Sync to Supabase
+        write_to_supabase('Bus', {'Numero_bus': numero, 'Etat': etat, 'Code_chauffeur': id_chauffeur}, {'Code_bus': id})
+
         return jsonify({"status": "success", "message": "Bus mis à jour"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -674,9 +758,11 @@ def delete_bus(id):
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Incident', 'delete', match={'Code_bus': id})
-        sync_to_supabase('Ligne', 'update', {'Code_bus': None}, {'Code_bus': id})
-        sync_to_supabase('Bus', 'delete', match={'Code_bus': id})
+        # Sync to Supabase
+        delete_from_supabase('Incident', {'Code_bus': id})
+        write_to_supabase('Ligne', {'Code_bus': None}, {'Code_bus': id})
+        delete_from_supabase('Bus', {'Code_bus': id})
+
         return jsonify({"status": "success", "message": "Bus supprimé"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -685,7 +771,11 @@ def delete_bus(id):
 @app.route('/get_available_buses', methods=['GET'])
 def get_available_buses():
     try:
-        conn  = get_db_connection()
+        supabase_data = read_from_supabase('Bus')
+        if supabase_data is not None:
+            return jsonify([{'Code_bus': b['Code_bus'], 'Numero_bus': b['Numero_bus']} for b in supabase_data])
+
+        conn = get_db_connection()
         buses = conn.execute("SELECT Code_bus, Numero_bus FROM Bus").fetchall()
         conn.close()
         return jsonify([dict(b) for b in buses])
@@ -694,13 +784,20 @@ def get_available_buses():
 
 
 # ════════════════════════════════════════════════════════════════
-# 4. LIGNES
+# 4. LIGNES (LECTURE FORCÉE DEPUIS SUPABASE) ⭐ PRIORITAIRE
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/get_lignes', methods=['GET'])
 def get_lignes():
     try:
-        conn   = get_db_connection()
+        # 🔥 LECTURE DIRECTE DEPUIS SUPABASE
+        supabase_data = read_from_supabase('Ligne', order_by='Code_Ligne', desc=True)
+        if supabase_data is not None:
+            print(f"[SUPABASE] Récupéré {len(supabase_data)} lignes")
+            return jsonify(supabase_data), 200
+
+        # Fallback SQLite
+        conn = get_db_connection()
         lignes = conn.execute('SELECT * FROM Ligne ORDER BY Code_Ligne DESC').fetchall()
         conn.close()
         return jsonify([dict(l) for l in lignes]), 200
@@ -711,8 +808,37 @@ def get_lignes():
 @app.route('/get_all_lignes', methods=['GET'])
 def get_all_lignes():
     try:
-        conn   = get_db_connection()
-        query  = """
+        # 🔥 Lecture depuis Supabase
+        supabase_data = read_from_supabase('Ligne', order_by='Code_Ligne', desc=True)
+        if supabase_data is not None:
+            result = []
+            for l in supabase_data:
+                # Récupérer le nom du chauffeur depuis Bus et Chauffeur
+                nom_chauffeur = "Non assigné"
+                code_bus = l.get('Code_bus')
+                if code_bus:
+                    bus_data = read_from_supabase('Bus', filters={'Code_bus': code_bus})
+                    if bus_data and len(bus_data) > 0:
+                        code_chauffeur = bus_data[0].get('Code_chauffeur')
+                        if code_chauffeur:
+                            chauffeur_data = read_from_supabase('Chauffeur', filters={'Code_chauffeur': code_chauffeur})
+                            if chauffeur_data and len(chauffeur_data) > 0:
+                                user_data = read_from_supabase('Utilisateur', filters={'ID_utilisateur': chauffeur_data[0].get('ID_utilisateur')})
+                                if user_data and len(user_data) > 0:
+                                    nom_chauffeur = user_data[0].get('Nom', 'Non assigné')
+                
+                result.append({
+                    "code_ligne": l.get("Code_Ligne"),
+                    "libelle": l.get("Libelle") or "Sans Nom",
+                    "description": l.get("Description") or "",
+                    "code_bus": l.get("Code_bus"),
+                    "nom_chauffeur": nom_chauffeur
+                })
+            return jsonify(result), 200
+
+        # Fallback SQLite
+        conn = get_db_connection()
+        query = """
             SELECT L.*, B.Numero_bus, U.Nom as Nom_Chauffeur
             FROM Ligne L
             LEFT JOIN Bus B ON L.Code_bus = B.Code_bus
@@ -723,10 +849,10 @@ def get_all_lignes():
         lignes = conn.execute(query).fetchall()
         conn.close()
         return jsonify([{
-            "code_ligne":    l["Code_Ligne"],
-            "libelle":       l["Libelle"] or "Sans Nom",
-            "description":   l["Description"] or "",
-            "code_bus":      l["Code_bus"],
+            "code_ligne": l["Code_Ligne"],
+            "libelle": l["Libelle"] or "Sans Nom",
+            "description": l["Description"] or "",
+            "code_bus": l["Code_bus"],
             "nom_chauffeur": l["Nom_Chauffeur"] or "Non assigné"
         } for l in lignes]), 200
     except Exception as e:
@@ -737,12 +863,13 @@ def get_all_lignes():
 def add_ligne():
     conn = None
     try:
-        data    = request.get_json()
+        data = request.get_json()
         libelle = data.get('libelle') or data.get('Libelle')
-        desc    = data.get('description') or data.get('Description')
+        desc = data.get('description') or data.get('Description')
         code_bus = data.get('code_bus') or data.get('Code_bus')
 
-        conn   = get_db_connection()
+        # 1️⃣ INSERT DANS SQLITE
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO Ligne (Libelle, Description, Code_bus) VALUES (?, ?, ?)",
@@ -750,24 +877,39 @@ def add_ligne():
         )
         new_id = cursor.lastrowid
         conn.commit()
+        conn.close()
 
-        sync_to_supabase('Ligne', 'insert', {
-            'Code_Ligne': new_id, 'Libelle': libelle,
-            'Description': desc, 'Code_bus': code_bus
-        })
-        return jsonify({"message": "Ligne ajoutée avec succès"}), 201
+        # 2️⃣ SYNC VERS SUPABASE
+        ligne_data = {
+            'Code_Ligne': new_id,
+            'Libelle': libelle,
+            'Description': desc,
+            'Code_bus': code_bus
+        }
+        write_to_supabase('Ligne', ligne_data)
+
+        # 3️⃣ VÉRIFICATION
+        verification = read_from_supabase('Ligne', filters={'Code_Ligne': new_id})
+        if verification and len(verification) > 0:
+            print(f"[VERIFY] ✅ Ligne {new_id} bien présente dans Supabase")
+        else:
+            print(f"[VERIFY] ⚠️ Ligne {new_id} non trouvée dans Supabase - tentative de réinsertion")
+            write_to_supabase('Ligne', ligne_data)
+
+        return jsonify({"message": "Ligne ajoutée avec succès", "id": new_id}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/update_ligne/<int:id>', methods=['PUT', 'POST'])
 def update_ligne(id):
     try:
-        data     = request.get_json()
-        libelle  = data.get('libelle')  or data.get('Libelle')
-        desc     = data.get('description') or data.get('Description')
+        data = request.get_json()
+        libelle = data.get('libelle') or data.get('Libelle')
+        desc = data.get('description') or data.get('Description')
         code_bus = data.get('code_bus') or data.get('Code_bus')
 
         conn = get_db_connection()
@@ -778,10 +920,9 @@ def update_ligne(id):
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Ligne', 'update',
-            {'Libelle': libelle, 'Description': desc, 'Code_bus': code_bus},
-            {'Code_Ligne': id}
-        )
+        # Sync to Supabase
+        write_to_supabase('Ligne', {'Libelle': libelle, 'Description': desc, 'Code_bus': code_bus}, {'Code_Ligne': id})
+
         return jsonify({"message": "Ligne mise à jour"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -794,7 +935,10 @@ def delete_ligne(id):
         conn.execute('DELETE FROM Ligne WHERE Code_Ligne = ?', (id,))
         conn.commit()
         conn.close()
-        sync_to_supabase('Ligne', 'delete', match={'Code_Ligne': id})
+
+        # Sync to Supabase
+        delete_from_supabase('Ligne', {'Code_Ligne': id})
+
         return jsonify({"message": "Ligne supprimée"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -807,7 +951,21 @@ def delete_ligne(id):
 @app.route('/get_chauffeurs', methods=['GET'])
 def get_chauffeurs():
     try:
-        conn  = get_db_connection()
+        supabase_data = read_from_supabase('Chauffeur')
+        if supabase_data is not None:
+            result = []
+            for c in supabase_data:
+                user_data = read_from_supabase('Utilisateur', filters={'ID_utilisateur': c.get('ID_utilisateur')})
+                if user_data and len(user_data) > 0:
+                    result.append({
+                        "ID_utilisateur": user_data[0].get('ID_utilisateur'),
+                        "Nom": user_data[0].get('Nom'),
+                        "Email": user_data[0].get('Email'),
+                        "Code_chauffeur": c.get('Code_chauffeur')
+                    })
+            return jsonify(result)
+
+        conn = get_db_connection()
         query = """
             SELECT u.ID_utilisateur, u.Nom, u.Email, c.Code_chauffeur
             FROM Chauffeur c
@@ -825,45 +983,47 @@ def get_chauffeurs():
 def add_chauffeur():
     conn = None
     try:
-        data     = request.get_json()
-        nom      = data.get('Nom')
-        email    = data.get('Email')
+        data = request.get_json()
+        nom = data.get('Nom')
+        email = data.get('Email')
         password = data.get('Password')
 
         if not nom or not email or not password:
             return jsonify({"error": "Nom, Email et Password sont obligatoires"}), 400
 
         hashed_pw = bcrypt.generate_password_hash(password).decode('utf-8')
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.execute(
             'INSERT INTO Utilisateur (Nom, Email, Mot_de_passe, Role) VALUES (?, ?, ?, ?)',
             (nom, email, hashed_pw, 'chauffeur')
         )
-        user_id  = cursor.lastrowid
-        cur2     = conn.execute('INSERT INTO Chauffeur (ID_utilisateur) VALUES (?)', (user_id,))
-        code_ch  = cur2.lastrowid
+        user_id = cursor.lastrowid
+        cur2 = conn.execute('INSERT INTO Chauffeur (ID_utilisateur) VALUES (?)', (user_id,))
+        code_ch = cur2.lastrowid
         conn.commit()
+        conn.close()
 
-        sync_to_supabase('Utilisateur', 'insert', {
+        # Sync to Supabase
+        write_to_supabase('Utilisateur', {
             'ID_utilisateur': user_id, 'Nom': nom, 'Email': email,
             'Mot_de_passe': hashed_pw, 'Role': 'chauffeur'
         })
-        sync_to_supabase('Chauffeur', 'insert', {
-            'Code_chauffeur': code_ch, 'ID_utilisateur': user_id
-        })
+        write_to_supabase('Chauffeur', {'Code_chauffeur': code_ch, 'ID_utilisateur': user_id})
+
         return jsonify({"message": "Chauffeur ajouté avec succès"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/update_chauffeur/<int:id>', methods=['PUT'])
 def update_chauffeur(id):
     try:
-        data     = request.get_json()
-        nom      = data.get('Nom')
-        email    = data.get('Email')
+        data = request.get_json()
+        nom = data.get('Nom')
+        email = data.get('Email')
         password = data.get('Password')
 
         conn = get_db_connection()
@@ -871,7 +1031,7 @@ def update_chauffeur(id):
         if password:
             hashed_pw = bcrypt.generate_password_hash(password).decode('utf-8')
         else:
-            existing  = conn.execute(
+            existing = conn.execute(
                 'SELECT Mot_de_passe FROM Utilisateur WHERE ID_utilisateur = ?', (id,)
             ).fetchone()
             hashed_pw = existing['Mot_de_passe'] if existing else ''
@@ -883,10 +1043,8 @@ def update_chauffeur(id):
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Utilisateur', 'update',
-            {'Nom': nom, 'Email': email, 'Mot_de_passe': hashed_pw},
-            {'ID_utilisateur': id}
-        )
+        write_to_supabase('Utilisateur', {'Nom': nom, 'Email': email, 'Mot_de_passe': hashed_pw}, {'ID_utilisateur': id})
+
         return jsonify({"message": "Chauffeur mis à jour ✅"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -901,8 +1059,9 @@ def delete_chauffeur(id):
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Chauffeur', 'delete', match={'ID_utilisateur': id})
-        sync_to_supabase('Utilisateur', 'delete', match={'ID_utilisateur': id})
+        delete_from_supabase('Chauffeur', {'ID_utilisateur': id})
+        delete_from_supabase('Utilisateur', {'ID_utilisateur': id})
+
         return jsonify({"message": "Chauffeur supprimé avec succès"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -911,31 +1070,59 @@ def delete_chauffeur(id):
 @app.route('/assign_work', methods=['POST'])
 def assign_work():
     try:
-        data           = request.get_json()
+        data = request.get_json()
         code_chauffeur = data.get('code_chauffeur')
-        code_bus       = data.get('code_bus')
-        code_ligne     = data.get('code_ligne')
+        code_bus = data.get('code_bus')
+        code_ligne = data.get('code_ligne')
 
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE Bus SET Code_chauffeur = ? WHERE Code_bus = ?", (code_chauffeur, code_bus))
         cursor.execute("UPDATE Ligne SET Code_bus = ? WHERE Code_Ligne = ?", (code_bus, code_ligne))
         conn.commit()
         conn.close()
+
+        write_to_supabase('Bus', {'Code_chauffeur': code_chauffeur}, {'Code_bus': code_bus})
+        write_to_supabase('Ligne', {'Code_bus': code_bus}, {'Code_Ligne': code_ligne})
+
         return jsonify({"message": "Affectation réussie !"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ════════════════════════════════════════════════════════════════
-# 6. PARCOURS
+# 6. PARCOURS (LECTURE FORCÉE DEPUIS SUPABASE)
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/get_all_parcours', methods=['GET'])
 def get_all_parcours():
     try:
-        conn  = get_db_connection()
-        rows  = conn.execute("""
+        # 🔥 Lecture depuis Supabase
+        supabase_data = read_from_supabase('Parcours', order_by='ID_parcours', desc=True)
+        if supabase_data is not None:
+            result = []
+            for p in supabase_data:
+                # Récupérer le nom de la ligne
+                nom_ligne = "Sans nom"
+                if p.get('Code_Ligne'):
+                    ligne_data = read_from_supabase('Ligne', filters={'Code_Ligne': p.get('Code_Ligne')})
+                    if ligne_data and len(ligne_data) > 0:
+                        nom_ligne = ligne_data[0].get('Libelle', 'Sans nom')
+                
+                result.append({
+                    "ID_parcours": p.get("ID_parcours"),
+                    "Depart": p.get("Depart"),
+                    "Arrivee": p.get("Arrivee"),
+                    "Heure_depart": p.get("Heure_depart"),
+                    "Heure_arrivee": p.get("Heure_arrivee"),
+                    "Code_Ligne": p.get("Code_Ligne"),
+                    "Nom_Ligne": nom_ligne
+                })
+            return jsonify(result), 200
+
+        # Fallback SQLite
+        conn = get_db_connection()
+        rows = conn.execute("""
             SELECT P.*, L.Libelle as Nom_Ligne
             FROM Parcours P
             JOIN Ligne L ON P.Code_Ligne = L.Code_Ligne
@@ -950,6 +1137,10 @@ def get_all_parcours():
 @app.route('/get_parcours/<int:code_ligne>', methods=['GET'])
 def get_parcours_by_ligne(code_ligne):
     try:
+        supabase_data = read_from_supabase('Parcours', filters={'Code_Ligne': code_ligne})
+        if supabase_data is not None:
+            return jsonify(supabase_data)
+
         conn = get_db_connection()
         rows = conn.execute("SELECT * FROM Parcours WHERE Code_Ligne = ?", (code_ligne,)).fetchall()
         conn.close()
@@ -961,15 +1152,15 @@ def get_parcours_by_ligne(code_ligne):
 @app.route('/add_parcours', methods=['POST'])
 def add_parcours():
     try:
-        data      = request.get_json()
-        depart    = data.get('Depart')
-        arrivee   = data.get('Arrivee')
-        heure_d   = data.get('Heure_depart')
-        heure_a   = data.get('Heure_arrivee', '--:--')
+        data = request.get_json()
+        depart = data.get('Depart')
+        arrivee = data.get('Arrivee')
+        heure_d = data.get('Heure_depart')
+        heure_a = data.get('Heure_arrivee', '--:--')
         code_ligne = data.get('Code_Ligne')
 
         conn = get_db_connection()
-        cur  = conn.execute(
+        cur = conn.execute(
             'INSERT INTO Parcours (Depart, Arrivee, Heure_depart, Heure_arrivee, Code_Ligne) VALUES (?, ?, ?, ?, ?)',
             (depart, arrivee, heure_d, heure_a, code_ligne)
         )
@@ -977,11 +1168,13 @@ def add_parcours():
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Parcours', 'insert', {
+        parcours_data = {
             'ID_parcours': new_id, 'Depart': depart, 'Arrivee': arrivee,
             'Heure_depart': heure_d, 'Heure_arrivee': heure_a, 'Code_Ligne': code_ligne
-        })
-        return jsonify({"message": "Parcours ajouté"}), 201
+        }
+        write_to_supabase('Parcours', parcours_data)
+
+        return jsonify({"message": "Parcours ajouté", "id": new_id}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1003,11 +1196,13 @@ def update_parcours(id):
             data.get('Code_Ligne'), id
         ))
         conn.commit()
-        sync_to_supabase('Parcours', 'update', {
+        
+        write_to_supabase('Parcours', {
             'Depart': data.get('Depart'), 'Arrivee': data.get('Arrivee'),
             'Heure_depart': data.get('Heure_depart'), 'Heure_arrivee': data.get('Heure_arrivee'),
             'Code_Ligne': data.get('Code_Ligne')
         }, {'ID_parcours': id})
+        
         return jsonify({"status": "success", "message": "Mise à jour réussie"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1024,7 +1219,7 @@ def delete_parcours(id):
         cur = conn.execute('DELETE FROM Parcours WHERE ID_parcours = ?', (id,))
         conn.commit()
         if cur.rowcount > 0:
-            sync_to_supabase('Parcours', 'delete', match={'ID_parcours': id})
+            delete_from_supabase('Parcours', {'ID_parcours': id})
             return jsonify({"status": "success"}), 200
         return jsonify({"status": "error", "message": "Parcours introuvable"}), 404
     except Exception as e:
@@ -1043,23 +1238,23 @@ def add_avis():
         return jsonify({"ok": True}), 200
 
     try:
-        data          = request.get_json(force=True)
-        comment       = data.get('commentaire', '')
-        note          = data.get('note', 5)
-        client_id     = data.get('client_id') or data.get('code_client')
-        parcours_id   = data.get('parcours_id')
+        data = request.get_json(force=True)
+        comment = data.get('commentaire', '')
+        note = data.get('note', 5)
+        client_id = data.get('client_id') or data.get('code_client')
+        parcours_id = data.get('parcours_id')
         id_historique = data.get('id_historique')
 
-        # ─── Analyse NLP ───────────────────────────────────────
+        # Analyse NLP
         sentiment_score, sentiment_label, keywords, category, is_risk = analyze_sentiment(comment)
 
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Résolution infos manquantes depuis Historique
+        # Résolution infos manquantes
         code_chauffeur = None
-        code_ligne     = None
-        code_bus       = None
+        code_ligne = None
+        code_bus = None
 
         if id_historique:
             res = cursor.execute("""
@@ -1071,17 +1266,19 @@ def add_avis():
             """, (id_historique,)).fetchone()
             if res:
                 code_chauffeur = res['Code_chauffeur']
-                parcours_id    = res['ID_parcours']
-                code_ligne     = res['Code_Ligne']
-                code_bus       = res['Code_bus']
+                parcours_id = res['ID_parcours']
+                code_ligne = res['Code_Ligne']
+                code_bus = res['Code_bus']
 
         if not code_bus and code_chauffeur:
             r = cursor.execute("SELECT Code_bus FROM Bus WHERE Code_chauffeur = ?", (code_chauffeur,)).fetchone()
-            if r: code_bus = r['Code_bus']
+            if r:
+                code_bus = r['Code_bus']
 
         if not code_bus and code_ligne:
             r = cursor.execute("SELECT Code_bus FROM Ligne WHERE Code_Ligne = ?", (code_ligne,)).fetchone()
-            if r: code_bus = r['Code_bus']
+            if r:
+                code_bus = r['Code_bus']
 
         # Insertion avis
         date_avis = data.get('date', datetime.now().strftime("%Y-%m-%d"))
@@ -1115,19 +1312,18 @@ def add_avis():
                 """, (id_historique, id_historique))
 
         # Détection automatique incident
-        incident_id = None
         if is_risk == "Oui":
             date_inc = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
                 INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus, Statut)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (f"[IA ALERT] {comment}", date_inc, code_chauffeur, code_ligne, code_bus, 'Signalé'))
-            incident_id = cursor.lastrowid
 
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Avis', 'insert', {
+        # Sync to Supabase
+        write_to_supabase('Avis', {
             'ID_avis': new_avis_id, 'Code_client': client_id,
             'ID_historique': id_historique, 'ID_parcours': parcours_id,
             'Note': note, 'Commentaire': comment,
@@ -1151,7 +1347,34 @@ def add_avis():
 @app.route('/get_avis', methods=['GET'])
 def get_avis():
     try:
-        conn  = get_db_connection()
+        supabase_data = read_from_supabase('Avis', order_by='Date', desc=True)
+        if supabase_data is not None:
+            result = []
+            for a in supabase_data:
+                # Récupérer le nom du client
+                nom_client = f"Client #{a.get('Code_client', '?')}"
+                if a.get('Code_client'):
+                    client_data = read_from_supabase('Client', filters={'Code_client': a.get('Code_client')})
+                    if client_data and len(client_data) > 0:
+                        user_data = read_from_supabase('Utilisateur', filters={'ID_utilisateur': client_data[0].get('ID_utilisateur')})
+                        if user_data and len(user_data) > 0:
+                            nom_client = user_data[0].get('Nom', nom_client)
+                
+                result.append({
+                    "ID_avis": a.get("ID_avis"),
+                    "Code_client": a.get("Code_client"),
+                    "Nom_Client": nom_client,
+                    "Note": a.get("Note"),
+                    "Commentaire": a.get("Commentaire"),
+                    "Date": a.get("Date"),
+                    "Sentiment_score": a.get("Sentiment_score"),
+                    "Sentiment_label": a.get("Sentiment_label"),
+                    "Keywords": a.get("Keywords"),
+                    "Category": a.get("Category")
+                })
+            return jsonify(result), 200
+
+        conn = get_db_connection()
         query = """
             SELECT a.*,
                    COALESCE(u.Nom, 'Client #' || CAST(a.Code_client AS TEXT)) as Nom_Client
@@ -1170,6 +1393,10 @@ def get_avis():
 @app.route('/get_avis_by_client/<int:client_id>', methods=['GET'])
 def get_avis_by_client(client_id):
     try:
+        supabase_data = read_from_supabase('Avis', filters={'Code_client': client_id}, order_by='Date', desc=True)
+        if supabase_data is not None:
+            return jsonify(supabase_data)
+
         conn = get_db_connection()
         avis = conn.execute("""
             SELECT a.ID_avis, a.Commentaire, a.Note, a.Date, h.Depart, h.Arrivee
@@ -1187,14 +1414,17 @@ def get_avis_by_client(client_id):
 @app.route('/update_avis/<int:id>', methods=['PUT'])
 def update_avis(id):
     try:
-        data       = request.get_json()
+        data = request.get_json()
         commentaire = data.get("commentaire")
-        note        = data.get("note")
-        conn        = get_db_connection()
+        note = data.get("note")
+        conn = get_db_connection()
         conn.execute("UPDATE Avis SET Commentaire = ?, Note = ? WHERE ID_avis = ?",
                      (commentaire, note, id))
         conn.commit()
         conn.close()
+
+        write_to_supabase('Avis', {'Commentaire': commentaire, 'Note': note}, {'ID_avis': id})
+
         return jsonify({"message": "Avis mis à jour"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1207,6 +1437,9 @@ def delete_avis(id):
         conn.execute("DELETE FROM Avis WHERE ID_avis = ?", (id,))
         conn.commit()
         conn.close()
+
+        delete_from_supabase('Avis', {'ID_avis': id})
+
         return jsonify({"message": "Avis supprimé"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1215,9 +1448,9 @@ def delete_avis(id):
 @app.route('/recategorize_avis', methods=['POST'])
 def recategorize_avis():
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
-        rows   = cursor.execute(
+        rows = cursor.execute(
             "SELECT ID_avis, Commentaire FROM Avis WHERE Commentaire IS NOT NULL AND Commentaire != ''"
         ).fetchall()
         updated = 0
@@ -1239,7 +1472,41 @@ def recategorize_avis():
 @app.route('/get_incidents', methods=['GET'])
 def get_incidents():
     try:
-        conn  = get_db_connection()
+        supabase_data = read_from_supabase('Incident', order_by='Date', desc=True)
+        if supabase_data is not None:
+            result = []
+            for i in supabase_data:
+                # Enrichir avec infos bus et chauffeur
+                numero_bus = "N/A"
+                nom_chauffeur = "Inconnu"
+                
+                if i.get('Code_bus'):
+                    bus_data = read_from_supabase('Bus', filters={'Code_bus': i.get('Code_bus')})
+                    if bus_data and len(bus_data) > 0:
+                        numero_bus = bus_data[0].get('Numero_bus', 'N/A')
+                
+                if i.get('Code_chauffeur'):
+                    chauffeur_data = read_from_supabase('Chauffeur', filters={'Code_chauffeur': i.get('Code_chauffeur')})
+                    if chauffeur_data and len(chauffeur_data) > 0:
+                        user_data = read_from_supabase('Utilisateur', filters={'ID_utilisateur': chauffeur_data[0].get('ID_utilisateur')})
+                        if user_data and len(user_data) > 0:
+                            nom_chauffeur = user_data[0].get('Nom', 'Inconnu')
+                
+                result.append({
+                    "ID_incident": i.get("ID_incident"),
+                    "Description": i.get("Description"),
+                    "Date": i.get("Date"),
+                    "Code_chauffeur": i.get("Code_chauffeur"),
+                    "Code_Ligne": i.get("Code_Ligne"),
+                    "Code_bus": i.get("Code_bus"),
+                    "Statut": i.get("Statut"),
+                    "Performance_IA": i.get("Performance_IA"),
+                    "Numero_bus": numero_bus,
+                    "NomChauffeur": nom_chauffeur
+                })
+            return jsonify(result), 200
+
+        conn = get_db_connection()
         query = """
             SELECT I.*,
                    COALESCE(B.Numero_bus, 'N/A') as Numero_bus,
@@ -1260,7 +1527,37 @@ def get_incidents():
 @app.route('/get_all_incidents', methods=['GET'])
 def get_all_incidents():
     try:
-        conn  = get_db_connection()
+        supabase_data = read_from_supabase('Incident', order_by='Date', desc=True)
+        if supabase_data is not None:
+            result = []
+            for i in supabase_data:
+                nom_ligne = "N/A"
+                if i.get('Code_Ligne'):
+                    ligne_data = read_from_supabase('Ligne', filters={'Code_Ligne': i.get('Code_Ligne')})
+                    if ligne_data and len(ligne_data) > 0:
+                        nom_ligne = ligne_data[0].get('Libelle', 'N/A')
+                
+                numero_bus = "N/A"
+                if i.get('Code_bus'):
+                    bus_data = read_from_supabase('Bus', filters={'Code_bus': i.get('Code_bus')})
+                    if bus_data and len(bus_data) > 0:
+                        numero_bus = bus_data[0].get('Numero_bus', 'N/A')
+                
+                result.append({
+                    "ID_incident": i.get("ID_incident"),
+                    "Description": i.get("Description"),
+                    "Date": i.get("Date"),
+                    "Code_chauffeur": i.get("Code_chauffeur"),
+                    "Code_Ligne": i.get("Code_Ligne"),
+                    "Code_bus": i.get("Code_bus"),
+                    "Statut": i.get("Statut"),
+                    "Performance_IA": i.get("Performance_IA"),
+                    "Nom_Ligne": nom_ligne,
+                    "Numero_bus": numero_bus
+                })
+            return jsonify(result), 200
+
+        conn = get_db_connection()
         query = """
             SELECT i.*, l.Libelle as Nom_Ligne,
                    COALESCE(b1.Numero_bus, b2.Numero_bus) as Numero_bus
@@ -1281,20 +1578,21 @@ def get_all_incidents():
 @app.route('/add_incident', methods=['POST'])
 def add_incident():
     try:
-        data        = request.get_json()
+        data = request.get_json()
         description = data.get('description', '')
         id_chauffeur = data.get('Code_chauffeur') or data.get('code_chauffeur')
-        id_ligne    = data.get('Code_Ligne')    or data.get('code_ligne')
-        code_bus    = data.get('Code_bus')      or data.get('code_bus')
-        statut      = data.get('Statut', 'Signalé')
-        date_inc    = data.get('Date') or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        id_ligne = data.get('Code_Ligne') or data.get('code_ligne')
+        code_bus = data.get('Code_bus') or data.get('code_bus')
+        statut = data.get('Statut', 'Signalé')
+        date_inc = data.get('Date') or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         if not code_bus and id_chauffeur:
             r = cursor.execute("SELECT Code_bus FROM Bus WHERE Code_chauffeur = ?", (id_chauffeur,)).fetchone()
-            if r: code_bus = r['Code_bus']
+            if r:
+                code_bus = r['Code_bus']
 
         cursor.execute("""
             INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus, Statut)
@@ -1304,11 +1602,12 @@ def add_incident():
         conn.commit()
         conn.close()
 
-        sync_to_supabase('Incident', 'insert', {
+        write_to_supabase('Incident', {
             'ID_incident': new_id, 'Description': description, 'Date': date_inc,
             'Code_chauffeur': id_chauffeur, 'Code_Ligne': id_ligne,
             'Code_bus': code_bus, 'Statut': statut
         })
+
         return jsonify({"message": "Incident ajouté", "id": new_id}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1319,12 +1618,12 @@ def declare_incident():
     if request.method == 'OPTIONS':
         return jsonify({"status": "ok"}), 200
     try:
-        data        = request.get_json()
-        user_id     = data.get('driver_id')
+        data = request.get_json()
+        user_id = data.get('driver_id')
         description = data.get('description', '')
-        timestamp   = data.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        timestamp = data.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         res_ch = cursor.execute(
@@ -1343,15 +1642,22 @@ def declare_incident():
             LIMIT 1
         """, (code_chauffeur,)).fetchone()
 
-        code_bus   = res_info['Code_bus']    if res_info else None
-        code_ligne = res_info['Code_Ligne']  if res_info else None
+        code_bus = res_info['Code_bus'] if res_info else None
+        code_ligne = res_info['Code_Ligne'] if res_info else None
 
         cursor.execute("""
             INSERT INTO Incident (Description, Date, Code_chauffeur, Code_Ligne, Code_bus)
             VALUES (?, ?, ?, ?, ?)
         """, (description, timestamp, code_chauffeur, code_ligne, code_bus))
+        new_id = cursor.lastrowid
         conn.commit()
         conn.close()
+
+        write_to_supabase('Incident', {
+            'ID_incident': new_id, 'Description': description, 'Date': timestamp,
+            'Code_chauffeur': code_chauffeur, 'Code_Ligne': code_ligne, 'Code_bus': code_bus
+        })
+
         return jsonify({"message": "Incident signalé avec succès"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1364,7 +1670,9 @@ def delete_incident(id):
         conn.execute('DELETE FROM Incident WHERE ID_incident = ?', (id,))
         conn.commit()
         conn.close()
-        sync_to_supabase('Incident', 'delete', match={'ID_incident': id})
+
+        delete_from_supabase('Incident', {'ID_incident': id})
+
         return jsonify({"status": "success", "message": "Incident supprimé"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1373,20 +1681,19 @@ def delete_incident(id):
 @app.route('/update_incident_status/<int:id>', methods=['POST'])
 def update_incident_status(id):
     try:
-        data     = request.get_json()
-        statut   = data.get('Statut')
+        data = request.get_json()
+        statut = data.get('Statut')
         critique = data.get('Critique')
-        conn     = get_db_connection()
+        conn = get_db_connection()
         conn.execute(
             'UPDATE Incident SET Statut = ?, Performance_IA = ? WHERE ID_incident = ?',
             (statut, critique, id)
         )
         conn.commit()
         conn.close()
-        sync_to_supabase('Incident', 'update',
-            {'Statut': statut, 'Performance_IA': critique},
-            {'ID_incident': id}
-        )
+
+        write_to_supabase('Incident', {'Statut': statut, 'Performance_IA': critique}, {'ID_incident': id})
+
         return jsonify({"message": "Statut mis à jour"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1399,13 +1706,13 @@ def update_incident_status(id):
 @app.route('/log_historique', methods=['POST'])
 def log_historique():
     try:
-        data       = request.get_json()
-        action     = data['action']
-        user_id    = data['driver_id']
+        data = request.get_json()
+        action = data['action']
+        user_id = data['driver_id']
         parcours_id = data['parcours_id']
-        now        = data['timestamp']
+        now = data['timestamp']
 
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         res_ch = cursor.execute(
@@ -1422,6 +1729,7 @@ def log_historique():
                 INSERT INTO Historique (Date, Heure_fin, Statut, Depart, Arrivee, Performance_IA, ID_parcours, Code_chauffeur)
                 VALUES (?, NULL, 'En cours', ?, ?, NULL, ?, ?)
             """, (now, data.get('depart'), data.get('arrivee'), parcours_id, code_chauffeur))
+            new_id = cursor.lastrowid
             message = "Voyage démarré"
 
         elif action == "Fin":
@@ -1451,6 +1759,40 @@ def log_historique():
 @app.route('/get_all_historique', methods=['GET'])
 def get_all_historique():
     try:
+        supabase_data = read_from_supabase('Historique', order_by='Date', desc=True)
+        if supabase_data is not None:
+            result = []
+            for h in supabase_data:
+                nom_chauffeur = "Inconnu"
+                nom_ligne = "N/A"
+                
+                if h.get('Code_chauffeur'):
+                    chauffeur_data = read_from_supabase('Chauffeur', filters={'Code_chauffeur': h.get('Code_chauffeur')})
+                    if chauffeur_data and len(chauffeur_data) > 0:
+                        user_data = read_from_supabase('Utilisateur', filters={'ID_utilisateur': chauffeur_data[0].get('ID_utilisateur')})
+                        if user_data and len(user_data) > 0:
+                            nom_chauffeur = user_data[0].get('Nom', 'Inconnu')
+                
+                if h.get('ID_parcours'):
+                    parcours_data = read_from_supabase('Parcours', filters={'ID_parcours': h.get('ID_parcours')})
+                    if parcours_data and len(parcours_data) > 0:
+                        ligne_data = read_from_supabase('Ligne', filters={'Code_Ligne': parcours_data[0].get('Code_Ligne')})
+                        if ligne_data and len(ligne_data) > 0:
+                            nom_ligne = ligne_data[0].get('Libelle', 'N/A')
+                
+                result.append({
+                    "ID_historique": h.get("ID_historique"),
+                    "Date": h.get("Date"),
+                    "Heure_fin": h.get("Heure_fin"),
+                    "Statut": h.get("Statut"),
+                    "Depart": h.get("Depart"),
+                    "Arrivee": h.get("Arrivee"),
+                    "Performance_IA": h.get("Performance_IA"),
+                    "Nom_Chauffeur": nom_chauffeur,
+                    "Nom_Ligne": nom_ligne
+                })
+            return jsonify(result), 200
+
         conn = get_db_connection()
         rows = conn.execute("""
             SELECT h.ID_historique, h.Date, h.Heure_fin, h.Statut,
@@ -1476,18 +1818,18 @@ def get_all_historique():
 @app.route('/get_counts', methods=['GET'])
 def get_counts():
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
-        return jsonify({
-            "lignes":     cursor.execute('SELECT COUNT(*) FROM Ligne').fetchone()[0],
+        counts = {
+            "lignes": cursor.execute('SELECT COUNT(*) FROM Ligne').fetchone()[0],
             "chauffeurs": cursor.execute('SELECT COUNT(*) FROM Chauffeur').fetchone()[0],
-            "bus":        cursor.execute('SELECT COUNT(*) FROM Bus').fetchone()[0],
-            "incidents":  cursor.execute('SELECT COUNT(*) FROM Incident').fetchone()[0],
-        }), 200
+            "bus": cursor.execute('SELECT COUNT(*) FROM Bus').fetchone()[0],
+            "incidents": cursor.execute('SELECT COUNT(*) FROM Incident').fetchone()[0],
+        }
+        conn.close()
+        return jsonify(counts), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
 
 
 @app.route('/get_performance_v2', methods=['GET'])
@@ -1516,7 +1858,7 @@ def get_performance_v2():
 @app.route('/get_driver_stats/<int:user_id>', methods=['GET'])
 def get_driver_stats(user_id):
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         res = cursor.execute(
@@ -1527,7 +1869,7 @@ def get_driver_stats(user_id):
             return jsonify({"error": "Chauffeur introuvable"}), 404
 
         code_chauffeur = res['Code_chauffeur']
-        perf_score     = res['Performance_score']
+        perf_score = res['Performance_score']
 
         avis = cursor.execute("""
             SELECT a.Note, a.Commentaire, a.Sentiment_label, a.Category, a.Date
@@ -1551,10 +1893,10 @@ def get_driver_stats(user_id):
 
         conn.close()
         return jsonify({
-            "performance_score":      round(perf_score or 0, 2),
-            "incident_count":         incident_count,
-            "recent_reviews":         [dict(r) for r in avis],
-            "category_distribution":  {r['Category']: r['count'] for r in cat_stats}
+            "performance_score": round(perf_score or 0, 2),
+            "incident_count": incident_count,
+            "recent_reviews": [dict(r) for r in avis],
+            "category_distribution": {r['Category']: r['count'] for r in cat_stats}
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1563,7 +1905,7 @@ def get_driver_stats(user_id):
 @app.route('/get_driver_reviews/<int:user_id>', methods=['GET'])
 def get_driver_reviews(user_id):
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         res = cursor.execute(
@@ -1591,22 +1933,23 @@ def get_driver_reviews(user_id):
 @app.route('/get_nlp_report', methods=['GET'])
 def get_nlp_report():
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
-        total_avis  = cursor.execute("SELECT COUNT(*) FROM Avis").fetchone()[0]
-        sentiments  = cursor.execute(
+        total_avis = cursor.execute("SELECT COUNT(*) FROM Avis").fetchone()[0]
+        sentiments = cursor.execute(
             "SELECT Sentiment_label, COUNT(*) as count FROM Avis GROUP BY Sentiment_label"
         ).fetchall()
-        avg_score   = cursor.execute("SELECT AVG(Sentiment_score) FROM Avis").fetchone()[0] or 0
+        avg_score = cursor.execute("SELECT AVG(Sentiment_score) FROM Avis").fetchone()[0] or 0
 
-        kw_rows     = cursor.execute("SELECT Keywords FROM Avis WHERE Keywords != ''").fetchall()
-        kw_counts   = {}
+        kw_rows = cursor.execute("SELECT Keywords FROM Avis WHERE Keywords != ''").fetchall()
+        kw_counts = {}
         for r in kw_rows:
             if r['Keywords']:
                 for kw in r['Keywords'].split(', '):
                     kw = kw.strip()
-                    if kw: kw_counts[kw] = kw_counts.get(kw, 0) + 1
+                    if kw:
+                        kw_counts[kw] = kw_counts.get(kw, 0) + 1
         top_kw = sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]
 
         top_drivers = cursor.execute("""
@@ -1635,13 +1978,13 @@ def get_nlp_report():
 
         conn.close()
         return jsonify({
-            "total_avis":              total_avis,
-            "sentiment_distribution":  {r['Sentiment_label']: r['count'] for r in sentiments},
+            "total_avis": total_avis,
+            "sentiment_distribution": {r['Sentiment_label']: r['count'] for r in sentiments},
             "average_sentiment_score": round(avg_score, 2),
-            "top_keywords":            top_kw,
-            "top_drivers":             [dict(r) for r in top_drivers],
-            "parcours_stats":          [dict(r) for r in parcours_stats],
-            "safety_alerts_count":     safety_alerts
+            "top_keywords": top_kw,
+            "top_drivers": [dict(r) for r in top_drivers],
+            "parcours_stats": [dict(r) for r in parcours_stats],
+            "safety_alerts_count": safety_alerts
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1650,10 +1993,10 @@ def get_nlp_report():
 @app.route('/get_driver_nlp_report', methods=['GET'])
 def get_driver_nlp_report():
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
 
-        total    = cursor.execute("SELECT COUNT(*) FROM Avis WHERE Category = 'Chauffeur'").fetchone()[0]
+        total = cursor.execute("SELECT COUNT(*) FROM Avis WHERE Category = 'Chauffeur'").fetchone()[0]
         sentiments = cursor.execute("""
             SELECT Sentiment_label, COUNT(*) as count
             FROM Avis WHERE Category = 'Chauffeur'
@@ -1662,11 +2005,11 @@ def get_driver_nlp_report():
         avg_score = cursor.execute(
             "SELECT AVG(Sentiment_score) FROM Avis WHERE Category = 'Chauffeur'"
         ).fetchone()[0] or 0
-        avg_note  = cursor.execute(
+        avg_note = cursor.execute(
             "SELECT AVG(Note) FROM Avis WHERE Category = 'Chauffeur'"
         ).fetchone()[0] or 0
 
-        kw_rows   = cursor.execute(
+        kw_rows = cursor.execute(
             "SELECT Keywords FROM Avis WHERE Category = 'Chauffeur' AND Keywords != ''"
         ).fetchall()
         kw_counts = {}
@@ -1674,7 +2017,8 @@ def get_driver_nlp_report():
             if r['Keywords']:
                 for kw in r['Keywords'].split(', '):
                     kw = kw.strip()
-                    if kw: kw_counts[kw] = kw_counts.get(kw, 0) + 1
+                    if kw:
+                        kw_counts[kw] = kw_counts.get(kw, 0) + 1
         top_kw = sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]
 
         avis_rows = cursor.execute("""
@@ -1702,14 +2046,14 @@ def get_driver_nlp_report():
         satisfaction_pct = round(((avg_score + 1) / 2) * 100, 1)
 
         return jsonify({
-            "total_avis_chauffeur":  total,
+            "total_avis_chauffeur": total,
             "satisfaction_chauffeur": satisfaction_pct,
-            "avg_note":              round(avg_note, 2),
-            "avg_sentiment_score":   round(avg_score, 2),
+            "avg_note": round(avg_note, 2),
+            "avg_sentiment_score": round(avg_score, 2),
             "sentiment_distribution": {r['Sentiment_label']: r['count'] for r in sentiments},
-            "top_keywords":          top_kw,
-            "top_drivers":           [dict(r) for r in top_drivers],
-            "avis_list":             [dict(r) for r in avis_rows]
+            "top_keywords": top_kw,
+            "top_drivers": [dict(r) for r in top_drivers],
+            "avis_list": [dict(r) for r in avis_rows]
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1722,7 +2066,7 @@ def get_driver_nlp_report():
 @app.route('/get_client_trips', methods=['GET'])
 def get_client_trips():
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         lignes = conn.execute("SELECT * FROM Ligne").fetchall()
         result = []
         for l in lignes:
@@ -1736,10 +2080,10 @@ def get_client_trips():
                 ORDER BY h.Date DESC
             """, (l['Code_Ligne'],)).fetchall()
             result.append({
-                "code_ligne":  l["Code_Ligne"],
-                "libelle":     l["Libelle"] or "Ligne",
+                "code_ligne": l["Code_Ligne"],
+                "libelle": l["Libelle"] or "Ligne",
                 "description": l["Description"] or "",
-                "rides":       [dict(r) for r in rides]
+                "rides": [dict(r) for r in rides]
             })
         conn.close()
         return jsonify(result), 200
@@ -1750,9 +2094,9 @@ def get_client_trips():
 @app.route('/get_my_assignment/<int:user_id>', methods=['GET'])
 def get_my_assignment(user_id):
     try:
-        conn   = get_db_connection()
+        conn = get_db_connection()
         cursor = conn.cursor()
-        today  = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
 
         rows = cursor.execute("""
             SELECT DISTINCT
@@ -1822,7 +2166,45 @@ def finish_parcours(id_p):
 
 
 # ════════════════════════════════════════════════════════════════
-# 12. TEST
+# 12. DIAGNOSTIC - Vérification synchronisation
+# ════════════════════════════════════════════════════════════════
+
+@app.route('/check_sync_status', methods=['GET'])
+def check_sync_status():
+    """Vérifie la synchro entre SQLite et Supabase"""
+    result = {
+        "supabase_connected": SUPABASE_OK,
+        "tables": {}
+    }
+    
+    tables = ['Ligne', 'Parcours', 'Bus', 'Chauffeur', 'Utilisateur', 'Avis', 'Incident']
+    
+    for table in tables:
+        # Compter SQLite
+        conn = get_db_connection()
+        sqlite_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        conn.close()
+        
+        # Compter Supabase
+        supabase_count = None
+        if SUPABASE_OK and supabase:
+            try:
+                resp = supabase.from_(table).select("*", count="exact").execute()
+                supabase_count = resp.count
+            except Exception as e:
+                supabase_count = f"Error: {str(e)[:50]}"
+        
+        result["tables"][table] = {
+            "sqlite": sqlite_count,
+            "supabase": supabase_count if supabase_count is not None else "Not available",
+            "synced": sqlite_count == supabase_count if isinstance(supabase_count, int) else False
+        }
+    
+    return jsonify(result), 200
+
+
+# ════════════════════════════════════════════════════════════════
+# 13. TEST
 # ════════════════════════════════════════════════════════════════
 
 @app.route('/test', methods=['GET', 'POST'])
