@@ -1,0 +1,108 @@
+C:\Users\hp\Desktop\copie de appl finale\smart_trans_v2 - Copie\app.py:45: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+SUCCESS: Supabase connecté !
+
+[VERIF] Verification du schema Supabase...
+
+[ERROR] Table Ligne: colonnes manquantes -> ['Code_Ligne', 'Libelle', 'Description', 'Code_bus']
+[ERROR] Table Bus: colonnes manquantes -> ['Code_bus', 'Numero_bus', 'Etat', 'Code_chauffeur']
+[ERROR] Table Parcours: colonnes manquantes -> ['ID_parcours', 'Depart', 'Arrivee', 'Heure_depart', 'Heure_arrivee', 'Code_Ligne']
+[WARNING] Table Avis n'existe pas ou erreur: {'message': "Could not find the table 'public.Avis
+[ERROR] Table Incident: colonnes manquantes -> ['ID_incident', 'Description', 'Date', 'Code_chauffeur', 'Code_Ligne', 'Code_bus', 'Statut', 'Performance_IA']
+[ERROR] Table Utilisateur: colonnes manquantes -> ['ID_utilisateur', 'Nom', 'Email', 'Mot_de_passe', 'Role', 'Photo']
+[ERROR] Table Chauffeur: colonnes manquantes -> ['Code_chauffeur', 'ID_utilisateur', 'Performance_score']
+[ERROR] Table Client: colonnes manquantes -> ['Code_client', 'ID_utilisateur']
+[WARNING] Table Historique n'existe pas ou erreur: {'message': "Could not find the table 'public.Hist
+
+======================================================================
+[WARNING] COLONNES MANQUANTES DANS SUPABASE!
+======================================================================
+
+-> Execute ce SQL dans Supabase SQL Editor:
+
+-- CORRECTION DU SCHÉMA SUPABASE
+
+ALTER TABLE public.Ligne ADD COLUMN IF NOT EXISTS Code_Ligne TEXT;
+ALTER TABLE public.Ligne ADD COLUMN IF NOT EXISTS Libelle TEXT;
+ALTER TABLE public.Ligne ADD COLUMN IF NOT EXISTS Description TEXT;
+ALTER TABLE public.Ligne ADD COLUMN IF NOT EXISTS Code_bus TEXT;
+ALTER TABLE public.Bus ADD COLUMN IF NOT EXISTS Code_bus TEXT;
+ALTER TABLE public.Bus ADD COLUMN IF NOT EXISTS Numero_bus TEXT;
+ALTER TABLE public.Bus ADD COLUMN IF NOT EXISTS Etat TEXT;
+ALTER TABLE public.Bus ADD COLUMN IF NOT EXISTS Code_chauffeur TEXT;
+ALTER TABLE public.Parcours ADD COLUMN IF NOT EXISTS ID_parcours TEXT;
+ALTER TABLE public.Parcours ADD COLUMN IF NOT EXISTS Depart TEXT;
+ALTER TABLE public.Parcours ADD COLUMN IF NOT EXISTS Arrivee TEXT;
+ALTER TABLE public.Parcours ADD COLUMN IF NOT EXISTS Heure_depart TEXT;
+ALTER TABLE public.Parcours ADD COLUMN IF NOT EXISTS Heure_arrivee TEXT;
+ALTER TABLE public.Parcours ADD COLUMN IF NOT EXISTS Code_Ligne TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS ID_avis TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Code_client TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS ID_historique TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Note BIGINT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Commentaire TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Date TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Sentiment_score FLOAT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Sentiment_label TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Keywords TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS Category TEXT;
+ALTER TABLE public.Avis ADD COLUMN IF NOT EXISTS ID_parcours TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS ID_incident TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Description TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Date TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Code_chauffeur TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Code_Ligne TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Code_bus TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Statut TEXT;
+ALTER TABLE public.Incident ADD COLUMN IF NOT EXISTS Performance_IA FLOAT;
+ALTER TABLE public.Utilisateur ADD COLUMN IF NOT EXISTS ID_utilisateur TEXT;
+ALTER TABLE public.Utilisateur ADD COLUMN IF NOT EXISTS Nom TEXT;
+ALTER TABLE public.Utilisateur ADD COLUMN IF NOT EXISTS Email TEXT;
+ALTER TABLE public.Utilisateur ADD COLUMN IF NOT EXISTS Mot_de_passe TEXT;
+ALTER TABLE public.Utilisateur ADD COLUMN IF NOT EXISTS Role TEXT;
+ALTER TABLE public.Utilisateur ADD COLUMN IF NOT EXISTS Photo TEXT;
+ALTER TABLE public.Chauffeur ADD COLUMN IF NOT EXISTS Code_chauffeur TEXT;
+ALTER TABLE public.Chauffeur ADD COLUMN IF NOT EXISTS ID_utilisateur TEXT;
+ALTER TABLE public.Chauffeur ADD COLUMN IF NOT EXISTS Performance_score FLOAT;
+ALTER TABLE public.Client ADD COLUMN IF NOT EXISTS Code_client TEXT;
+ALTER TABLE public.Client ADD COLUMN IF NOT EXISTS ID_utilisateur TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS ID_historique TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Date TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Heure_fin TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Statut TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Depart TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Arrivee TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Performance_IA FLOAT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS ID_parcours TEXT;
+ALTER TABLE public.Historique ADD COLUMN IF NOT EXISTS Code_chauffeur TEXT;
+
+-- Vérification
+SELECT column_name FROM information_schema.columns WHERE table_name = 'ligne';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'bus';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'parcours';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'avis';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'incident';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'utilisateur';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'chauffeur';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'client';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'historique';
+
+
+======================================================================
+[WARNING] Apres avoir execute le SQL, REDEMARRE python app.py
+======================================================================
+[SUCCESS] Toutes les tables SQLite sont initialisees avec succes !
+ * Serving Flask app 'app'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.214.227:8000
+Press CTRL+C to quit
