@@ -59,7 +59,7 @@ def auto_fix_supabase_schema():
     """Affiche les colonnes manquantes dans Supabase"""
     
     if not SUPABASE_OK or supabase is None:
-        print("[WARNING] Supabase non connecte")
+        print("⚠️ Supabase non connecté")
         return
     
     print("\n[VERIF] Verification du schema Supabase...\n")
@@ -87,18 +87,18 @@ def auto_fix_supabase_schema():
             missing = [col for col in columns if col not in existing_cols]
             if missing:
                 missing_cols[table] = missing
-                print(f"[ERROR] Table {table}: colonnes manquantes -> {missing}")
+                print(f"❌ Table {table}: colonnes manquantes -> {missing}")
             else:
                 print(f"[OK] Table {table}: OK")
         except Exception as e:
-            print(f"[WARNING] Table {table} n'existe pas ou erreur: {str(e)[:50]}")
+            print(f"⚠️ Table {table} n'existe pas ou erreur: {str(e)[:50]}")
             missing_cols[table] = columns
     
     if missing_cols:
         print("\n" + "="*70)
-        print("[WARNING] COLONNES MANQUANTES DANS SUPABASE!")
+        print("⚠️ COLONNES MANQUANTES DANS SUPABASE!")
         print("="*70)
-        print("\n-> Execute ce SQL dans Supabase SQL Editor:\n")
+        print("\n👉 Exécute ce SQL dans Supabase SQL Editor (https://app.supabase.com → SQL Editor):\n")
         
         sql_script = "-- CORRECTION DU SCHÉMA SUPABASE\n\n"
         for table, cols in missing_cols.items():
@@ -114,7 +114,7 @@ def auto_fix_supabase_schema():
         
         print(sql_script)
         print("\n" + "="*70)
-        print("[WARNING] Apres avoir execute le SQL, REDEMARRE python app.py")
+        print("⚠️ Après avoir exécuté le SQL, REDÉMARRE python app.py")
         print("="*70)
         return False
     
@@ -958,107 +958,27 @@ def update_ligne(id):
 
 @app.route('/delete_ligne/<int:id>', methods=['DELETE'])
 def delete_ligne(id):
-    conn = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # ── 1. Récupérer les IDs des parcours AVANT toute suppression ──
-        parcours_rows = cursor.execute(
-            'SELECT ID_parcours FROM Parcours WHERE Code_Ligne = ?', (id,)
-        ).fetchall()
-        parcours_ids = [r['ID_parcours'] for r in parcours_rows]
-
-        # ── 2. Récupérer les IDs des avis liés à ces parcours ──
-        avis_ids = []
-        if parcours_ids:
-            placeholders = ','.join('?' * len(parcours_ids))
-            avis_rows = cursor.execute(
-                f'SELECT ID_avis FROM Avis WHERE ID_parcours IN ({placeholders})',
-                parcours_ids
-            ).fetchall()
-            avis_ids = [r['ID_avis'] for r in avis_rows]
-
-        # ── 3. Récupérer les IDs des historiques liés ──
-        hist_ids = []
-        if parcours_ids:
-            hist_rows = cursor.execute(
-                f'SELECT ID_historique FROM Historique WHERE ID_parcours IN ({placeholders})',
-                parcours_ids
-            ).fetchall()
-            hist_ids = [r['ID_historique'] for r in hist_rows]
-
-        # ── 4. Récupérer les IDs des incidents liés ──
-        inc_rows = cursor.execute(
-            'SELECT ID_incident FROM Incident WHERE Code_Ligne = ?', (id,)
-        ).fetchall()
-        inc_ids = [r['ID_incident'] for r in inc_rows]
-
-        # ══ SUPPRESSION SQLite (ordre FK) ══
-        if parcours_ids:
-            cursor.execute(
-                f'DELETE FROM Avis WHERE ID_parcours IN ({placeholders})', parcours_ids
-            )
-            cursor.execute(
-                f'DELETE FROM Historique WHERE ID_parcours IN ({placeholders})', parcours_ids
-            )
-        cursor.execute('DELETE FROM Incident WHERE Code_Ligne = ?', (id,))
-        cursor.execute('DELETE FROM Parcours WHERE Code_Ligne = ?', (id,))
-        cursor.execute('DELETE FROM Ligne WHERE Code_Ligne = ?', (id,))
-
-        if cursor.rowcount == 0:
-            conn.rollback()
-            return jsonify({"error": "Ligne introuvable"}), 404
-
+        
+        # 1. Supprimer d'abord les parcours liés
+        conn.execute('DELETE FROM Parcours WHERE Code_Ligne = ?', (id,))
+        # 2. Supprimer les incidents liés
+        conn.execute('DELETE FROM Incident WHERE Code_Ligne = ?', (id,))
+        # 3. Supprimer la ligne
+        conn.execute('DELETE FROM Ligne WHERE Code_Ligne = ?', (id,))
         conn.commit()
         conn.close()
-        conn = None
 
-        # ══ SUPPRESSION SUPABASE (même ordre FK) ══
-        if SUPABASE_OK and supabase:
-            try:
-                # Avis un par un
-                for aid in avis_ids:
-                    delete_from_supabase('Avis', {'ID_avis': aid})
+        # 4. Supprimer de Supabase
+        delete_from_supabase('Parcours', {'Code_Ligne': id})
+        delete_from_supabase('Incident', {'Code_Ligne': id})
+        delete_from_supabase('Ligne', {'Code_Ligne': id})
 
-                # Historiques un par un
-                for hid in hist_ids:
-                    delete_from_supabase('Historique', {'ID_historique': hid})
-
-                # Incidents un par un
-                for iid in inc_ids:
-                    delete_from_supabase('Incident', {'ID_incident': iid})
-
-                # Parcours un par un
-                for pid in parcours_ids:
-                    delete_from_supabase('Parcours', {'ID_parcours': pid})
-
-                # Enfin la ligne
-                delete_from_supabase('Ligne', {'Code_Ligne': id})
-
-            except Exception as e_sb:
-                print(f"[SUPABASE DELETE_LIGNE WARNING] {e_sb}")
-                # SQLite est déjà supprimé — on log mais on ne bloque pas
-
-        return jsonify({
-            "status": "success",
-            "message": "Ligne supprimée avec succès",
-            "details": {
-                "parcours": len(parcours_ids),
-                "avis": len(avis_ids),
-                "historiques": len(hist_ids),
-                "incidents": len(inc_ids)
-            }
-        }), 200
-
+        return jsonify({"message": "Ligne supprimée"}), 200
     except Exception as e:
-        print(f"[DELETE_LIGNE ERROR] {e}")
-        if conn:
-            conn.rollback()
         return jsonify({"error": str(e)}), 500
-    finally:
-        if conn:
-            conn.close()
+       
 
 
 # ════════════════════════════════════════════════════════════════
